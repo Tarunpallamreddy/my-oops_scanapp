@@ -233,6 +233,7 @@ export function ScanScreen({
   const lastScannedTimeRef = React.useRef<number>(0);
 
   const [scans, setScans] = useState<ScanResult[]>([]);
+  const [sessionScans, setSessionScans] = useState<ScanResult[]>([]);
 
   React.useEffect(() => {
     getScanHistory()
@@ -352,7 +353,9 @@ export function ScanScreen({
 
     setScans((prev) => [newScan, ...prev]);
 
-    if (!multiScanMode) {
+    if (multiScanMode) {
+      setSessionScans((prev) => [newScan, ...prev]);
+    } else {
       setSingleScanResult(newScan);
       if (newScan.redirectUrl) {
         WebBrowser.openBrowserAsync(newScan.redirectUrl).catch((err) => {
@@ -364,13 +367,19 @@ export function ScanScreen({
     // Perform background DB logging and update status
     submitScan(newScan.data, newScan.type)
       .then((response) => {
+        const nextStatus = response.success ? 'synced' : 'failed';
         setScans((prev) =>
           prev.map((item) =>
-            item.id === newScan.id
-              ? { ...item, status: response.success ? 'synced' : 'failed' }
-              : item
+            item.id === newScan.id ? { ...item, status: nextStatus } : item
           )
         );
+        if (multiScanMode) {
+          setSessionScans((prev) =>
+            prev.map((item) =>
+              item.id === newScan.id ? { ...item, status: nextStatus } : item
+            )
+          );
+        }
       })
       .catch((err) => {
         setScans((prev) =>
@@ -378,18 +387,31 @@ export function ScanScreen({
             item.id === newScan.id ? { ...item, status: 'failed' } : item
           )
         );
+        if (multiScanMode) {
+          setSessionScans((prev) =>
+            prev.map((item) =>
+              item.id === newScan.id ? { ...item, status: 'failed' } : item
+            )
+          );
+        }
       });
   };
 
   const handleToggleCamera = async () => {
     if (isCameraActive) {
       setIsCameraActive(false);
-      sessionScannedCodesRef.current.clear();
       lastScannedCodeRef.current = '';
       lastScannedTimeRef.current = 0;
       setLastScannedCode('');
       setLastScannedTime(0);
-      setSessionScanCount(0);
+
+      if (multiScanMode && sessionScans.length > 0) {
+        const count = sessionScans.length;
+        Alert.alert(
+          'Scan Complete',
+          `${count} barcode${count === 1 ? ' has' : 's have'} been scanned.`
+        );
+      }
       return;
     }
 
@@ -404,8 +426,9 @@ export function ScanScreen({
       }
     }
 
-    // Reset single scan card when opening camera
+    // Reset single scan card and current batch session scans when opening camera
     setSingleScanResult(null);
+    setSessionScans([]);
     sessionScannedCodesRef.current.clear();
     lastScannedCodeRef.current = '';
     lastScannedTimeRef.current = 0;
@@ -538,6 +561,13 @@ export function ScanScreen({
               item={item}
               theme={theme}
               onPress={() => setSelectedScanDetails(item)}
+              onPressLink={() => {
+                if (item.redirectUrl) {
+                  WebBrowser.openBrowserAsync(item.redirectUrl).catch((err) => {
+                    console.warn('Could not open in-app browser:', err);
+                  });
+                }
+              }}
             />
           )}
           contentContainerStyle={styles.listContent}
@@ -769,6 +799,78 @@ export function ScanScreen({
                 >
                   <Text style={styles.scanAgainBtnText}>Scan Again</Text>
                 </TouchableOpacity>
+              </View>
+            ) : (sessionScans.length > 0) ? (
+              /* Premium Batch Results List View */
+              <View style={[styles.batchCardContainer, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
+                {/* Header Row */}
+                <View style={styles.batchHeader}>
+                  <Text style={[styles.batchTitle, { color: colors.text }]}>
+                    Batch Results ({sessionScans.length})
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.batchCloseBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }]}
+                    onPress={() => {
+                      setSessionScans([]);
+                      sessionScannedCodesRef.current.clear();
+                      setSessionScanCount(0);
+                    }}
+                  >
+                    <Text style={{ color: colors.text, fontWeight: '700', fontSize: 11 }}>✕ Reset</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Scanned Barcodes List */}
+                <FlatList
+                  data={sessionScans}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={styles.batchListContent}
+                  style={styles.batchScrollList}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={[
+                        styles.batchItemRow,
+                        { borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)' }
+                      ]}
+                      onPress={() => setSelectedScanDetails(item)}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <View style={[styles.batchItemBadge, { backgroundColor: getClassificationStyles(item.classification).bg }]}>
+                            <Text style={[styles.batchItemBadgeText, { color: getClassificationStyles(item.classification).text }]}>
+                              {item.type}
+                            </Text>
+                          </View>
+                          {!!item.extractedDate && (
+                            <Text style={styles.batchItemDateText}>📅 {item.extractedDate}</Text>
+                          )}
+                        </View>
+                        {item.redirectUrl ? (
+                          <TouchableOpacity
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              if (item.redirectUrl) {
+                                WebBrowser.openBrowserAsync(item.redirectUrl).catch((err) => {
+                                  console.warn('Could not open in-app browser:', err);
+                                });
+                              }
+                            }}
+                            style={{ alignSelf: 'flex-start', maxWidth: '100%' }}
+                          >
+                            <Text style={[styles.batchItemValueText, { color: isDark ? '#38bdf8' : '#0284c7', textDecorationLine: 'underline' }]} numberOfLines={1}>
+                              🔗 {item.data}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : (
+                          <Text style={[styles.batchItemValueText, { color: colors.text }]} numberOfLines={1}>
+                            {item.data}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={{ color: '#ff682c', fontSize: 12, fontWeight: '700' }}>📄 Details →</Text>
+                    </TouchableOpacity>
+                  )}
+                />
               </View>
             ) : (
               /* Camera Inactive Placeholder */
@@ -1565,5 +1667,65 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 1,
+  },
+  batchCardContainer: {
+    width: '90%',
+    height: '90%',
+    padding: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  batchHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  batchTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  batchCloseBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  batchScrollList: {
+    flex: 1,
+  },
+  batchListContent: {
+    paddingBottom: 8,
+  },
+  batchItemRow: {
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  batchItemBadge: {
+    paddingVertical: 2,
+    paddingHorizontal: 6,
+    borderRadius: 4,
+    marginRight: 8,
+  },
+  batchItemBadgeText: {
+    fontSize: 8,
+    fontWeight: '800',
+  },
+  batchItemDateText: {
+    fontSize: 10,
+    color: '#10b981',
+    fontWeight: '600',
+  },
+  batchItemValueText: {
+    fontSize: 13,
+    fontWeight: '600',
+    marginTop: 4,
   },
 });

@@ -1,64 +1,115 @@
-const fs = require('fs');
-const path = require('path');
+const sql = require('mssql');
+const { dbConfig } = require('./config');
 
-const DATA_DIR = path.join(__dirname, 'data');
-const DATA_FILE = path.join(DATA_DIR, 'scans.json');
+// Initialize database pool
+let pool = null;
 
-// Ensure database directory and file exist
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
+async function getPool() {
+  if (pool) return pool;
+  try {
+    console.log('[Database] Connecting to Microsoft SQL Server...');
+    pool = await sql.connect(dbConfig);
+    console.log('[Database] Connected successfully.');
+    
+    // Initialize Scans table if it does not exist
+    const createTableQuery = `
+      IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Scans' AND xtype='U')
+      CREATE TABLE Scans (
+        id VARCHAR(50) PRIMARY KEY,
+        data NVARCHAR(MAX) NOT NULL,
+        type VARCHAR(50) NOT NULL,
+        timestamp VARCHAR(50) NOT NULL,
+        status VARCHAR(20) NOT NULL,
+        classification VARCHAR(50),
+        scannedDateFormatted VARCHAR(50),
+        extractedDate VARCHAR(50),
+        redirectUrl NVARCHAR(MAX),
+        details NVARCHAR(MAX)
+      )
+    `;
+    await pool.request().query(createTableQuery);
+    console.log('[Database] Scans table checked/initialized in SQL Server.');
+    
+    return pool;
+  } catch (err) {
+    console.error('[Database] SQL Server Connection failed:', err.message);
+    pool = null;
+    throw err;
+  }
 }
 
-if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify([], null, 2), 'utf-8');
-}
-
-// Load database scans into memory cache once at startup
-let scansCache = [];
-try {
-  const rawData = fs.readFileSync(DATA_FILE, 'utf-8');
-  scansCache = JSON.parse(rawData);
-  console.log(`[Database] Loaded ${scansCache.length} scans into memory cache.`);
-} catch (err) {
-  console.error('[Database] Error loading database file to cache:', err);
-  scansCache = [];
-}
-
-// Write cache to database file asynchronously in background (non-blocking)
-function saveCacheToDisk() {
-  fs.writeFile(DATA_FILE, JSON.stringify(scansCache, null, 2), 'utf-8', (err) => {
-    if (err) {
-      console.error('[Database] Error writing database file in background:', err);
-    }
-  });
-}
+// Auto-trigger connection at startup to verify configuration
+getPool().catch(() => {});
 
 module.exports = {
-  // Get all scans instantly from memory cache
-  getAll() {
-    return scansCache;
+  // Get all scans asynchronously
+  async getAll() {
+    try {
+      const dbPool = await getPool();
+      const result = await dbPool.request().query('SELECT * FROM Scans ORDER BY timestamp DESC');
+      
+      // Map rows, parsing the stringified details JSON
+      return result.recordset.map(row => ({
+        ...row,
+        details: row.details ? JSON.parse(row.details) : null
+      }));
+    } catch (err) {
+      console.error('[Database] Failed to retrieve scans from SQL Server:', err.message);
+      return [];
+    }
   },
 
-  // Save scan instantly to memory cache, then persist asynchronously
-  save(scan) {
-    const exists = scansCache.some(s => s.id === scan.id);
-    if (exists) {
+  // Save scan asynchronously
+  async save(scan) {
+    try {
+      const dbPool = await getPool();
+      
+      // Check if it already exists to prevent duplication
+      const existsCheck = await dbPool.request()
+        .input('id', sql.VarChar(50), scan.id)
+        .query('SELECT 1 FROM Scans WHERE id = @id');
+      
+      if (existsCheck.recordset.length > 0) {
+        return scan;
+      }
+      
+      // Insert new scan
+      const insertQuery = `
+        INSERT INTO Scans (id, data, type, timestamp, status, classification, scannedDateFormatted, extractedDate, redirectUrl, details)
+        VALUES (@id, @data, @type, @timestamp, @status, @classification, @scannedDateFormatted, @extractedDate, @redirectUrl, @details)
+      `;
+      
+      await dbPool.request()
+        .input('id', sql.VarChar(50), scan.id)
+        .input('data', sql.NVarChar(sql.MAX), scan.data)
+        .input('type', sql.VarChar(50), scan.type)
+        .input('timestamp', sql.VarChar(50), scan.timestamp)
+        .input('status', sql.VarChar(20), scan.status)
+        .input('classification', sql.VarChar(50), scan.classification || null)
+        .input('scannedDateFormatted', sql.VarChar(50), scan.scannedDateFormatted || null)
+        .input('extractedDate', sql.VarChar(50), scan.extractedDate || null)
+        .input('redirectUrl', sql.NVarChar(sql.MAX), scan.redirectUrl || null)
+        .input('details', sql.NVarChar(sql.MAX), scan.details ? JSON.stringify(scan.details) : null)
+        .query(insertQuery);
+        
+      console.log(`[Database] Scanned item saved to SQL Server: ${scan.data}`);
+      return scan;
+    } catch (err) {
+      console.error('[Database] Save failed in SQL Server:', err.message);
       return scan;
     }
-
-    // Prepend new scan to memory log cache
-    scansCache.unshift(scan);
-    
-    // Save to disk in the background
-    saveCacheToDisk();
-    
-    return scan;
   },
 
-  // Clear cache instantly and clear disk asynchronously
-  clear() {
-    scansCache = [];
-    saveCacheToDisk();
-    return true;
+  // Clear history asynchronously
+  async clear() {
+    try {
+      const dbPool = await getPool();
+      await dbPool.request().query('DELETE FROM Scans');
+      console.log('[Database] Cleared all scans from SQL Server.');
+      return true;
+    } catch (err) {
+      console.error('[Database] Clear failed in SQL Server:', err.message);
+      return false;
+    }
   }
 };

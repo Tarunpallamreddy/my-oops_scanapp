@@ -10,6 +10,7 @@
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "morgan": "^1.10.0",
+    "mssql": "^12.5.5",
     "uuid": "^9.0.1"
   },
   "private": true

@@ -221,7 +221,7 @@ function parseCodeDetails(code, type, classification) {
  * Submit scanned barcode / serial
  * Body: { code: string, type: string, deviceTimestamp: string }
  */
-app.post('/api/v1/scans', (req, res) => {
+app.post('/api/v1/scans', async (req, res) => {
   const { code, type, deviceTimestamp } = req.body;
 
   if (!code || !type) {
@@ -265,7 +265,7 @@ app.post('/api/v1/scans', (req, res) => {
     details,
   };
 
-  db.save(scanRecord);
+  await db.save(scanRecord);
 
   res.status(201).json({
     success: true,
@@ -283,16 +283,16 @@ app.post('/api/v1/scans', (req, res) => {
 /**
  * Fetch scan history log list
  */
-app.get('/api/v1/scans/history', (req, res) => {
-  const scans = db.getAll();
+app.get('/api/v1/scans/history', async (req, res) => {
+  const scans = await db.getAll();
   res.status(200).json(scans);
 });
 
 /**
  * Clear scan history database
  */
-app.delete('/api/v1/scans', (req, res) => {
-  db.clear();
+app.delete('/api/v1/scans', async (req, res) => {
+  await db.clear();
   res.status(200).json({
     success: true,
     message: 'Scan history successfully cleared',

@@ -6,9 +6,10 @@ interface ScanHistoryCardProps {
   item: ScanResult;
   theme: 'dark' | 'light';
   onPress?: () => void;
+  onPressLink?: () => void;
 }
 
-export function ScanHistoryCard({ item, theme, onPress }: ScanHistoryCardProps) {
+export function ScanHistoryCard({ item, theme, onPress, onPressLink }: ScanHistoryCardProps) {
   const isDark = theme === 'dark';
 
   // Format the time as fallback if scannedDateFormatted doesn't exist
@@ -79,9 +80,23 @@ export function ScanHistoryCard({ item, theme, onPress }: ScanHistoryCardProps) 
             {formattedTime}
           </Text>
         </View>
-        <Text style={[styles.cardData, { color: isDark ? '#f1f5f9' : '#0f172a' }]} numberOfLines={1}>
-          {item.data}
-        </Text>
+        {item.redirectUrl ? (
+          <TouchableOpacity
+            onPress={(e) => {
+              e.stopPropagation();
+              onPressLink?.();
+            }}
+            style={styles.linkWrapper}
+          >
+            <Text style={[styles.cardData, { color: isDark ? '#38bdf8' : '#0284c7', textDecorationLine: 'underline' }]} numberOfLines={1}>
+              🔗 {item.data}
+            </Text>
+          </TouchableOpacity>
+        ) : (
+          <Text style={[styles.cardData, { color: isDark ? '#f1f5f9' : '#0f172a' }]} numberOfLines={1}>
+            {item.data}
+          </Text>
+        )}
 
         {/* Display Extracted Date if found inside barcode/OCR */}
         {!!item.extractedDate && (
@@ -147,6 +162,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '600',
     letterSpacing: 0.2,
+  },
+  linkWrapper: {
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
   },
   extractedDateBadge: {
     marginTop: 8,
