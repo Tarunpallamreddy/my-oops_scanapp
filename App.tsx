@@ -1,20 +1,55 @@
-import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import React, { useState } from 'react';
+import { LoginScreen } from './src/screens/LoginScreen';
+import { ScanScreen } from './src/screens/ScanScreen';
+import { Settings } from './src/screens/Settings';
 
 export default function App() {
+  const [currentScreen, setCurrentScreen] = useState<'Scan' | 'Settings'>('Scan');
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  
+  // Shared config states
+  const [profileName, setProfileName] = useState<string>('Tarun Saiteja');
+  const [profileEmail, setProfileEmail] = useState<string>('tarun@example.com');
+  const [theme, setTheme] = useState<'dark' | 'light'>('dark');
+
+  // If not authenticated, force the beautiful login screen
+  if (!isAuthenticated) {
+    return (
+      <LoginScreen
+        theme={theme}
+        onLogin={(name, email) => {
+          setProfileName(name);
+          setProfileEmail(email);
+          setIsAuthenticated(true);
+        }}
+      />
+    );
+  }
+
+  if (currentScreen === 'Settings') {
+    return (
+      <Settings
+        profileName={profileName}
+        setProfileName={setProfileName}
+        profileEmail={profileEmail}
+        setProfileEmail={setProfileEmail}
+        theme={theme}
+        setTheme={setTheme}
+        onClose={() => setCurrentScreen('Scan')}
+        onLogout={() => {
+          setIsAuthenticated(false);
+          setCurrentScreen('Scan');
+        }}
+      />
+    );
+  }
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <ScanScreen
+      profileName={profileName}
+      profileEmail={profileEmail}
+      theme={theme}
+      onOpenSettings={() => setCurrentScreen('Settings')}
+    />
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

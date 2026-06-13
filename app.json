@@ -20,6 +20,16 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Scan Hub to access your camera to scan barcodes and serial numbers.",
+          "barcodeScannerEnabled": true
+        }
+      ],
+      "expo-web-browser"
+    ]
   }
 }
