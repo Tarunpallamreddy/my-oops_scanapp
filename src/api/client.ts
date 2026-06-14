@@ -8,17 +8,16 @@ const getBaseUrl = () => {
   const match = scriptURL.match(/^[a-z]+:\/\/([^:/]+)/i);
   if (match && match[1]) {
     let host = match[1];
-    if ((host === 'localhost' || host === '127.0.0.1') && Platform.OS === 'android') {
-      host = '10.0.2.2';
+    // If host resolves to a local loopback but the app is on a physical device,
+    // route it directly to your PC's active local IP address.
+    if (host === 'localhost' || host === '127.0.0.1' || host === '10.0.2.2') {
+      return 'http://192.168.1.3:3000/api/v1';
     }
     return `http://${host}:3000/api/v1`;
   }
 
-  // Fallback defaults
-  if (Platform.OS === 'android') {
-    return 'http://10.0.2.2:3000/api/v1';
-  }
-  return 'http://localhost:3000/api/v1';
+  // Fallback default (your PC's actual local IP address on the network)
+  return 'http://192.168.1.3:3000/api/v1';
 };
 
 const BASE_URL = getBaseUrl();

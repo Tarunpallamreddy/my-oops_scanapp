@@ -447,6 +447,7 @@ export function ScanScreen({
 
     setIsSyncing(true);
     let successCount = 0;
+    let lastError = '';
 
     for (const scan of pendingScansList) {
       try {
@@ -468,14 +469,23 @@ export function ScanScreen({
                 : item
             )
           );
+        } else {
+          lastError = response.error || 'Unknown server rejection';
         }
-      } catch (e) {
-        // Skip failed
+      } catch (e: any) {
+        lastError = e.message || 'Network error';
       }
     }
 
     setIsSyncing(false);
-    Alert.alert('Sync complete', `Successfully synchronized ${successCount} scan(s).`);
+    if (successCount === 0 && lastError) {
+      Alert.alert(
+        'Sync Failed',
+        `Could not reach the database server:\n\n"${lastError}"\n\nTroubleshooting checklist:\n1. Ensure your phone is on the SAME Wi-Fi network as the PC.\n2. Ensure your PC's Wi-Fi network is NOT set to 'Public' profile.\n3. Make sure the backend server window is running on your PC.`
+      );
+    } else {
+      Alert.alert('Sync complete', `Successfully synchronized ${successCount} scan(s).`);
+    }
   };
 
   const clearHistory = () => {
@@ -932,6 +942,8 @@ export function ScanScreen({
             {isCameraActive ? 'Stop Scanner' : 'Start Scanning'}
           </Text>
         </TouchableOpacity>
+
+
 
         <TouchableOpacity
           style={[
