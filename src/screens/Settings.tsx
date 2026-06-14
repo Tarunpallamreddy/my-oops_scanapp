@@ -5,10 +5,10 @@ import {
   Text,
   TouchableOpacity,
   TextInput,
-  SafeAreaView,
   StatusBar,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface SettingsProps {
   profileName: string;

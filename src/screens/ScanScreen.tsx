@@ -6,7 +6,6 @@ import {
   TouchableOpacity,
   FlatList,
   ActivityIndicator,
-  SafeAreaView,
   StatusBar,
   Alert,
   Platform,
@@ -14,6 +13,7 @@ import {
   Modal,
   ScrollView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as WebBrowser from 'expo-web-browser';
 import { ScannerOverlay } from './ScannerOverlay';

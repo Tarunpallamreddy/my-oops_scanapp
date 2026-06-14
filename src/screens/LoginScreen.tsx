@@ -5,7 +5,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  SafeAreaView,
   StatusBar,
   KeyboardAvoidingView,
   Platform,
@@ -13,6 +12,7 @@ import {
   TouchableWithoutFeedback,
   Keyboard,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 interface LoginScreenProps {
   theme: 'dark' | 'light';
@@ -23,15 +23,15 @@ export function LoginScreen({ theme, onLogin }: LoginScreenProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
-  
+
   // To switch between login and register flow simulated views
   const [isRegistering, setIsRegistering] = useState(false);
-  
+
   // Validation state
   const [errors, setErrors] = useState<{ email?: string; password?: string; name?: string }>({});
 
   const isDark = theme === 'dark';
-  
+
   const colors = {
     bg: isDark ? '#090d16' : '#f8fafc',
     cardBg: isDark ? '#131a26' : '#ffffff',
@@ -45,23 +45,23 @@ export function LoginScreen({ theme, onLogin }: LoginScreenProps) {
 
   const validate = () => {
     const newErrors: typeof errors = {};
-    
+
     if (isRegistering && !name.trim()) {
       newErrors.name = 'Name is required';
     }
-    
+
     if (!email) {
       newErrors.email = 'Email is required';
     } else if (!/\S+@\S+\.\S+/.test(email)) {
       newErrors.email = 'Please enter a valid email address';
     }
-    
+
     if (!password) {
       newErrors.password = 'Password is required';
     } else if (password.length < 6) {
       newErrors.password = 'Password must be at least 6 characters';
     }
-    
+
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -77,7 +77,7 @@ export function LoginScreen({ theme, onLogin }: LoginScreenProps) {
     <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
       <SafeAreaView style={[styles.safeContainer, { backgroundColor: colors.bg }]}>
         <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.bg} />
-        
+
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboardContainer}
