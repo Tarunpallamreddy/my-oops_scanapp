@@ -8,7 +8,21 @@ async function getPool() {
   if (pool) return pool;
   try {
     console.log('[Database] Connecting to Microsoft SQL Server...');
-    pool = await sql.connect(dbConfig);
+    try {
+      pool = await sql.connect(dbConfig);
+    } catch (connectErr) {
+      if (connectErr.message.includes("database") || connectErr.message.includes("Cannot open database")) {
+        console.log(`[Database] Database '${dbConfig.database}' might not exist. Attempting to create it...`);
+        const masterConfig = { ...dbConfig, database: 'master' };
+        const tempPool = await sql.connect(masterConfig);
+        await tempPool.request().query(`IF NOT EXISTS (SELECT * FROM sys.databases WHERE name = '${dbConfig.database}') CREATE DATABASE [${dbConfig.database}]`);
+        await tempPool.close();
+        console.log(`[Database] Database '${dbConfig.database}' verified/created. Connecting...`);
+        pool = await sql.connect(dbConfig);
+      } else {
+        throw connectErr;
+      }
+    }
     console.log('[Database] Connected successfully.');
     
     // Initialize Scans table if it does not exist
@@ -96,7 +110,7 @@ module.exports = {
       return scan;
     } catch (err) {
       console.error('[Database] Save failed in SQL Server:', err.message);
-      return scan;
+      throw err;
     }
   },
 

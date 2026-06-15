@@ -3,21 +3,21 @@ import { ApiResponse } from '../types';
 
 const getBaseUrl = () => {
   const scriptURL = NativeModules.SourceCode?.scriptURL || '';
-  
-  // Match host/IP from any URL protocol, e.g., http://192.168.1.3:8081 or exp://192.168.1.3:8081
+
+  // Match host/IP from any URL protocol, e.g., http://192.168.10.159:8081 or exp://192.168.10.159:8081
   const match = scriptURL.match(/^[a-z]+:\/\/([^:/]+)/i);
   if (match && match[1]) {
     let host = match[1];
     // If host resolves to a local loopback but the app is on a physical device,
     // route it directly to your PC's active local IP address.
     if (host === 'localhost' || host === '127.0.0.1' || host === '10.0.2.2') {
-      return 'http://192.168.1.3:3000/api/v1';
+      return 'http://192.168.10.159:3000/api/v1';
     }
     return `http://${host}:3000/api/v1`;
   }
 
   // Fallback default (your PC's actual local IP address on the network)
-  return 'http://192.168.1.3:3000/api/v1';
+  return 'http://192.168.10.159:3000/api/v1';
 };
 
 const BASE_URL = getBaseUrl();
@@ -31,7 +31,7 @@ export async function apiClient<T>(
   config: RequestConfig = {}
 ): Promise<ApiResponse<T>> {
   const { params, headers, ...restOfConfig } = config;
-  
+
   // Construct URL with query parameters
   let url = `${BASE_URL}${endpoint}`;
   if (params && Object.keys(params).length > 0) {
@@ -82,7 +82,7 @@ export async function apiClient<T>(
     // Attempt local loopback fallback if the initial network call failed
     const fallbackHost = Platform.OS === 'android' ? '10.0.2.2' : 'localhost';
     const fallbackUrl = url.replace(/http:\/\/[^:/]+/, `http://${fallbackHost}`);
-    
+
     if (url !== fallbackUrl) {
       console.log(`[API Client] Initial call failed. Attempting loopback fallback: ${fallbackUrl}`);
       try {

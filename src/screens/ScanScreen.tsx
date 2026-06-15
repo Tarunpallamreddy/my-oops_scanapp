@@ -16,10 +16,13 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as WebBrowser from 'expo-web-browser';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ScannerOverlay } from './ScannerOverlay';
 import { ScanHistoryCard } from './ScanHistoryCard';
 import { ScanResult } from '../types';
 import { submitScan, getScanHistory, clearScanHistory } from '../api/api';
+
+const LOCAL_SCANS_KEY = '@mygoscan:scans';
 
 // Local Helpers for Instant Mobile Side Parsing (0ms Latency)
 
@@ -235,15 +238,64 @@ export function ScanScreen({
   const [scans, setScans] = useState<ScanResult[]>([]);
   const [sessionScans, setSessionScans] = useState<ScanResult[]>([]);
 
+  const saveScansToStorage = async (updatedScans: ScanResult[]) => {
+    try {
+      await AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(updatedScans));
+    } catch (e) {
+      console.warn('Failed to save scans to local storage:', e);
+    }
+  };
+
   React.useEffect(() => {
-    getScanHistory()
-      .then((response) => {
-        if (response.success && response.data) {
-          setScans(response.data);
+    // 1. Load scans from AsyncStorage immediately for instant offline load
+    AsyncStorage.getItem(LOCAL_SCANS_KEY)
+      .then((stored) => {
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          setScans(parsed);
         }
       })
       .catch((err) => {
-        console.warn('Failed to load scan history:', err);
+        console.warn('Failed to load local scans from AsyncStorage:', err);
+      });
+
+    // 2. Fetch latest scans from server and merge them
+    getScanHistory()
+      .then((response) => {
+        if (response.success && response.data) {
+          setScans((prev) => {
+            const serverScans = response.data || [];
+            const mergedMap = new Map<string, ScanResult>();
+            
+            // First add all server scans (which are synced)
+            serverScans.forEach(s => {
+              mergedMap.set(s.id, { ...s, status: 'synced' });
+            });
+            
+            // Add local scans (preserving any pending/failed states)
+            prev.forEach(s => {
+              if (!mergedMap.has(s.id)) {
+                mergedMap.set(s.id, s);
+              } else if (s.status !== 'synced') {
+                mergedMap.set(s.id, { ...s, status: 'synced' });
+              }
+            });
+
+            const mergedList = Array.from(mergedMap.values()).sort(
+              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+            );
+
+            // Update local storage with the merged results
+            AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(mergedList)).catch(e => {
+              console.warn('Failed to save merged scans to AsyncStorage:', e);
+            });
+
+            return mergedList;
+          });
+        }
+      })
+      .catch((err) => {
+        console.warn('Failed to load scan history from server:', err);
       });
   }, []);
 
@@ -351,7 +403,11 @@ export function ScanScreen({
       details,
     };
 
-    setScans((prev) => [newScan, ...prev]);
+    setScans((prev) => {
+      const updated = [newScan, ...prev];
+      saveScansToStorage(updated);
+      return updated;
+    });
 
     if (multiScanMode) {
       setSessionScans((prev) => [newScan, ...prev]);
@@ -367,30 +423,34 @@ export function ScanScreen({
     // Perform background DB logging and update status
     submitScan(newScan.data, newScan.type)
       .then((response) => {
-        const nextStatus = response.success ? 'synced' : 'failed';
-        setScans((prev) =>
-          prev.map((item) =>
-            item.id === newScan.id ? { ...item, status: nextStatus } : item
-          )
-        );
+        const nextStatus: 'synced' | 'failed' = response.success ? 'synced' : 'failed';
+        setScans((prev) => {
+          const updated: ScanResult[] = prev.map((item) =>
+            item.id === newScan.id ? ({ ...item, status: nextStatus } as ScanResult) : item
+          );
+          saveScansToStorage(updated);
+          return updated;
+        });
         if (multiScanMode) {
           setSessionScans((prev) =>
             prev.map((item) =>
-              item.id === newScan.id ? { ...item, status: nextStatus } : item
+              item.id === newScan.id ? ({ ...item, status: nextStatus } as ScanResult) : item
             )
           );
         }
       })
       .catch((err) => {
-        setScans((prev) =>
-          prev.map((item) =>
-            item.id === newScan.id ? { ...item, status: 'failed' } : item
-          )
-        );
+        setScans((prev) => {
+          const updated: ScanResult[] = prev.map((item) =>
+            item.id === newScan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
+          );
+          saveScansToStorage(updated);
+          return updated;
+        });
         if (multiScanMode) {
           setSessionScans((prev) =>
             prev.map((item) =>
-              item.id === newScan.id ? { ...item, status: 'failed' } : item
+              item.id === newScan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
             )
           );
         }
@@ -448,34 +508,42 @@ export function ScanScreen({
     setIsSyncing(true);
     let successCount = 0;
     let lastError = '';
+    let updatedScans = [...scans];
 
     for (const scan of pendingScansList) {
       try {
         const response = await submitScan(scan.data, scan.type);
         if (response.success) {
           successCount++;
-          setScans((prev) =>
-            prev.map((item) =>
-              item.id === scan.id
-                ? {
-                  ...item,
-                  status: 'synced',
-                  classification: response.data?.classification,
-                  scannedDateFormatted: response.data?.scannedDateFormatted,
-                  extractedDate: response.data?.extractedDate,
-                  redirectUrl: response.data?.redirectUrl,
-                  details: response.data?.details,
-                }
-                : item
-            )
+          updatedScans = updatedScans.map((item) =>
+            item.id === scan.id
+              ? {
+                ...item,
+                status: 'synced',
+                classification: response.data?.classification,
+                scannedDateFormatted: response.data?.scannedDateFormatted,
+                extractedDate: response.data?.extractedDate,
+                redirectUrl: response.data?.redirectUrl,
+                details: response.data?.details,
+              }
+              : item
           );
         } else {
           lastError = response.error || 'Unknown server rejection';
+          updatedScans = updatedScans.map((item) =>
+            item.id === scan.id ? { ...item, status: 'failed' } : item
+          );
         }
       } catch (e: any) {
         lastError = e.message || 'Network error';
+        updatedScans = updatedScans.map((item) =>
+          item.id === scan.id ? { ...item, status: 'failed' } : item
+        );
       }
     }
+
+    setScans(updatedScans);
+    await saveScansToStorage(updatedScans);
 
     setIsSyncing(false);
     if (successCount === 0 && lastError) {
@@ -496,6 +564,7 @@ export function ScanScreen({
         style: 'destructive',
         onPress: () => {
           setScans([]);
+          saveScansToStorage([]);
           clearScanHistory().catch((err) => {
             console.warn('Failed to clear database logs:', err);
           });
@@ -523,6 +592,17 @@ export function ScanScreen({
           <Text style={[styles.headerTitle, { color: colors.text }]}>Scan Logs</Text>
 
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            {(pendingScans > 0 || failedScans > 0) && (
+              <TouchableOpacity
+                onPress={handleSyncAll}
+                disabled={isSyncing}
+                style={[styles.clearBtn, { marginRight: 12 }]}
+              >
+                <Text style={[styles.clearBtnText, { color: '#ff682c' }]}>
+                  {isSyncing ? 'Syncing...' : 'Sync All'}
+                </Text>
+              </TouchableOpacity>
+            )}
             {scans.length > 0 && (
               <TouchableOpacity onPress={clearHistory} style={[styles.clearBtn, { marginRight: 12 }]}>
                 <Text style={styles.clearBtnText}>Clear All</Text>
@@ -656,6 +736,7 @@ export function ScanScreen({
         </View>
       </View>
 
+
       {/* Camera Viewport Container - grows dynamically when logs are hidden */}
       <View style={[styles.viewportContainer, styles.viewportContainerExpanded]}>
         {/* Active Mode Indicator Badge (Overlay on the viewport) */}
@@ -675,13 +756,16 @@ export function ScanScreen({
                 'qr',
                 'code128',
                 'ean13',
+                'ean8',
                 'upc_a',
                 'upc_e',
                 'code39',
+                'code93',
                 'pdf417',
                 'itf14',
                 'codabar',
                 'aztec',
+                'datamatrix',
               ],
             }}
             onBarcodeScanned={handleBarcodeScanned}
@@ -898,37 +982,54 @@ export function ScanScreen({
       {/* Scan Mode Toggle Panel */}
       <View style={[styles.modePanel, { backgroundColor: colors.bg, borderTopColor: colors.border }]}>
         <Text style={[styles.modeLabel, { color: colors.mutedText }]}>Scan Mode</Text>
-        <View style={[styles.modeToggleGroup, { backgroundColor: isDark ? '#131a26' : '#e2e8f0' }]}>
-          <TouchableOpacity
-            style={[
-              styles.modeToggleBtn,
-              multiScanMode && styles.modeToggleBtnActive,
-            ]}
-            onPress={() => {
-              setMultiScanMode(true);
-              sessionScannedCodesRef.current.clear();
-              setSessionScanCount(0);
-            }}
-          >
-            <Text style={[styles.modeToggleText, multiScanMode && styles.modeToggleTextActive]}>
-              Multi
-            </Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[
-              styles.modeToggleBtn,
-              !multiScanMode && styles.modeToggleBtnActive,
-            ]}
-            onPress={() => {
-              setMultiScanMode(false);
-              sessionScannedCodesRef.current.clear();
-              setSessionScanCount(0);
-            }}
-          >
-            <Text style={[styles.modeToggleText, !multiScanMode && styles.modeToggleTextActive]}>
-              Single
-            </Text>
-          </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <View style={[styles.modeToggleGroup, { backgroundColor: isDark ? '#131a26' : '#e2e8f0' }]}>
+            <TouchableOpacity
+              style={[
+                styles.modeToggleBtn,
+                multiScanMode && styles.modeToggleBtnActive,
+              ]}
+              onPress={() => {
+                setMultiScanMode(true);
+                sessionScannedCodesRef.current.clear();
+                setSessionScanCount(0);
+              }}
+            >
+              <Text style={[styles.modeToggleText, multiScanMode && styles.modeToggleTextActive]}>
+                Multi
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[
+                styles.modeToggleBtn,
+                !multiScanMode && styles.modeToggleBtnActive,
+              ]}
+              onPress={() => {
+                setMultiScanMode(false);
+                sessionScannedCodesRef.current.clear();
+                setSessionScanCount(0);
+              }}
+            >
+              <Text style={[styles.modeToggleText, !multiScanMode && styles.modeToggleTextActive]}>
+                Single
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {(pendingScans > 0 || failedScans > 0) && (
+            <TouchableOpacity
+              style={[styles.miniSyncBtn, isSyncing && styles.miniSyncBtnDisabled]}
+              onPress={handleSyncAll}
+              disabled={isSyncing}
+            >
+              {isSyncing ? (
+                <ActivityIndicator color="#ffffff" size="small" style={{ marginRight: 4, transform: [{ scale: 0.7 }] }} />
+              ) : null}
+              <Text style={styles.miniSyncText}>
+                {isSyncing ? 'Syncing...' : `🔄 Sync (${pendingScans + failedScans})`}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
 
@@ -1739,5 +1840,23 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     marginTop: 4,
+  },
+  miniSyncBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    backgroundColor: '#ff682c',
+    marginLeft: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  miniSyncBtnDisabled: {
+    backgroundColor: 'rgba(255, 104, 44, 0.4)',
+  },
+  miniSyncText: {
+    color: '#ffffff',
+    fontSize: 11,
+    fontWeight: '700',
   },
 });

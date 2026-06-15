@@ -265,19 +265,27 @@ app.post('/api/v1/scans', async (req, res) => {
     details,
   };
 
-  await db.save(scanRecord);
+  try {
+    await db.save(scanRecord);
 
-  res.status(201).json({
-    success: true,
-    scanId: scanId,
-    processedAt: processedAt,
-    verified: true,
-    classification,
-    scannedDateFormatted,
-    extractedDate,
-    redirectUrl,
-    details,
-  });
+    res.status(201).json({
+      success: true,
+      scanId: scanId,
+      processedAt: processedAt,
+      verified: true,
+      classification,
+      scannedDateFormatted,
+      extractedDate,
+      redirectUrl,
+      details,
+    });
+  } catch (dbErr) {
+    console.error('[Database Save Error] Failed to write scan record:', dbErr.message);
+    res.status(500).json({
+      success: false,
+      error: `Failed to save scan in database: ${dbErr.message}`,
+    });
+  }
 });
 
 /**
