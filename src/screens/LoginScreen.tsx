@@ -92,7 +92,7 @@ export function LoginScreen({ theme, onLogin }: LoginScreenProps) {
                 <Text style={styles.brandLogoIcon}>📷</Text>
                 <View style={styles.laserLine} />
               </View>
-              <Text style={[styles.brandName, { color: colors.text }]}>My Go Scan</Text>
+              <Text style={[styles.brandName, { color: colors.text }]}>MyGo Scan</Text>
               <Text style={[styles.brandSubtitle, { color: colors.mutedText }]}>
                 OCR & Barcode Intelligence Hub
               </Text>

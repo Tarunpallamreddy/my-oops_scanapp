@@ -7,9 +7,18 @@ interface ScanHistoryCardProps {
   theme: 'dark' | 'light';
   onPress?: () => void;
   onPressLink?: () => void;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }
 
-export function ScanHistoryCard({ item, theme, onPress, onPressLink }: ScanHistoryCardProps) {
+export function ScanHistoryCard({
+  item,
+  theme,
+  onPress,
+  onPressLink,
+  selected = false,
+  onToggleSelect,
+}: ScanHistoryCardProps) {
   const isDark = theme === 'dark';
 
   // Format the time as fallback if scannedDateFormatted doesn't exist
@@ -62,6 +71,32 @@ export function ScanHistoryCard({ item, theme, onPress, onPressLink }: ScanHisto
         },
       ]}
     >
+      {onToggleSelect && (
+        <TouchableOpacity
+          activeOpacity={0.6}
+          style={styles.checkboxContainer}
+          onPress={(e) => {
+            e.stopPropagation();
+            onToggleSelect();
+          }}
+        >
+          <View
+            style={[
+              styles.checkbox,
+              {
+                borderColor: selected
+                  ? '#ff682c'
+                  : isDark
+                  ? 'rgba(255, 255, 255, 0.25)'
+                  : 'rgba(0, 0, 0, 0.25)',
+                backgroundColor: selected ? '#ff682c' : 'transparent',
+              },
+            ]}
+          >
+            {selected && <Text style={styles.checkboxCheck}>✓</Text>}
+          </View>
+        </TouchableOpacity>
+      )}
       <View style={styles.cardInfo}>
         <View style={styles.cardHeaderRow}>
           <View style={styles.typeTagRow}>
@@ -80,7 +115,7 @@ export function ScanHistoryCard({ item, theme, onPress, onPressLink }: ScanHisto
             {formattedTime}
           </Text>
         </View>
-        {item.redirectUrl ? (
+        {item.classification === 'Web Link' ? (
           <TouchableOpacity
             onPress={(e) => {
               e.stopPropagation();
@@ -106,9 +141,38 @@ export function ScanHistoryCard({ item, theme, onPress, onPressLink }: ScanHisto
             </Text>
           </View>
         )}
+
+        {/* Display Live API serial info if available */}
+        {item.details?.serialApiData && (
+          item.details.serialApiData.notFound ? (
+            <View style={[styles.apiDataBadge, { backgroundColor: isDark ? 'rgba(244, 63, 94, 0.05)' : 'rgba(244, 63, 94, 0.08)', borderColor: 'rgba(244, 63, 94, 0.15)' }]}>
+              <Text style={[styles.apiProductText, { color: '#f43f5e', fontSize: 11 }]}>
+                ⚠️ Serial number not found in SAP database
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.apiDataBadge}>
+              <Text style={[styles.apiProductText, { color: isDark ? '#f8fafc' : '#0f172a' }]}>
+                📦 {item.details.serialApiData.product}
+              </Text>
+              <Text style={styles.apiDetailText}>
+                Status: {item.details.serialApiData.status} • Sold to: {item.details.serialApiData.soldToParty}
+              </Text>
+            </View>
+          )
+        )}
+
+        {/* Display Sales Order if present */}
+        {!!item.salesOrder && (
+          <View style={[styles.salesOrderBadge, { backgroundColor: isDark ? 'rgba(255, 104, 44, 0.08)' : 'rgba(255, 104, 44, 0.12)' }]}>
+            <Text style={[styles.salesOrderText, { color: '#ff682c' }]}>
+              🛒 Sales Order: {item.salesOrder}
+            </Text>
+          </View>
+        )}
       </View>
 
-
+      <Text style={{ color: '#ff682c', fontSize: 12, fontWeight: '700' }}>📄 Details →</Text>
     </TouchableOpacity>
   );
 }
@@ -228,6 +292,55 @@ const styles = StyleSheet.create({
   },
   textFailed: {
     color: '#f43f5e',
+  },
+  apiDataBadge: {
+    marginTop: 8,
+    padding: 8,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255, 104, 44, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 104, 44, 0.15)',
+  },
+  apiProductText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  apiDetailText: {
+    fontSize: 10,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  checkboxContainer: {
+    marginRight: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 6,
+    borderWidth: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  checkboxCheck: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  salesOrderBadge: {
+    marginTop: 8,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 104, 44, 0.25)',
+  },
+  salesOrderText: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
 });
 

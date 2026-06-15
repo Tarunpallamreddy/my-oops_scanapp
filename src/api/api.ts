@@ -45,3 +45,22 @@ export async function clearScanHistory(): Promise<ApiResponse<{ success: boolean
     method: 'DELETE',
   });
 }
+
+/**
+ * Updates scans with a generated 10-digit Sales Order number.
+ * @param scanIds Array of scan IDs to update.
+ * @param salesOrder The 10-digit Sales Order number to associate.
+ * @returns Promise with ApiResponse.
+ */
+export async function updateSalesOrder(
+  scanIds: string[],
+  salesOrder: string
+): Promise<ApiResponse<{ success: boolean }>> {
+  return apiClient<{ success: boolean }>('/scans/sales-order', {
+    method: 'POST',
+    body: JSON.stringify({
+      scanIds,
+      salesOrder,
+    }),
+  });
+}

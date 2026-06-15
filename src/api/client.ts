@@ -24,6 +24,7 @@ const BASE_URL = getBaseUrl();
 
 interface RequestConfig extends RequestInit {
   params?: Record<string, string>;
+
 }
 
 export async function apiClient<T>(

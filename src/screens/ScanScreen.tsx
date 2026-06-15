@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ScannerOverlay } from './ScannerOverlay';
 import { ScanHistoryCard } from './ScanHistoryCard';
 import { ScanResult } from '../types';
-import { submitScan, getScanHistory, clearScanHistory } from '../api/api';
+import { submitScan, getScanHistory, clearScanHistory, updateSalesOrder } from '../api/api';
 
 const LOCAL_SCANS_KEY = '@mygoscan:scans';
 
@@ -35,7 +35,18 @@ function classifyCodeLocally(code: string, type: string): 'Barcode' | 'OCR Seria
     return 'Web Link';
   }
 
-  // 2. Barcode
+  // 2. OCR Serial Number
+  const isSerialFormat = ['CODE128', 'CODE39', 'CODE93', 'PDF417', 'DATA_MATRIX', 'AZTEC'].some(
+    t => typeUpper.includes(t)
+  );
+  const isRetailNumeric = /^\d+$/.test(codeStr) && [6, 8, 12, 13].includes(codeStr.length);
+  const isSerialPattern = /^[A-Z0-9\-_]{5,30}$/i.test(codeStr) && !isRetailNumeric;
+
+  if (isSerialFormat || isSerialPattern || /^SN-/i.test(codeStr) || /^OCR/i.test(codeStr)) {
+    return 'OCR Serial Number';
+  }
+
+  // 3. Barcode
   const isBarcodeType = [
     'EAN13', 'EAN8', 'UPC_A', 'UPC_E', 'CODE128', 'CODE39', 'CODE93',
     'ITF14', 'CODABAR', 'PDF417', 'AZTEC', 'DATA_MATRIX'
@@ -47,14 +58,6 @@ function classifyCodeLocally(code: string, type: string): 'Barcode' | 'OCR Seria
 
   if (/^\d{8,14}$/.test(codeStr)) {
     return 'Barcode';
-  }
-
-  // 3. OCR Serial Number
-  const isSerialPattern = /^[A-Z0-9\-_]{5,30}$/i.test(codeStr) &&
-    (/[A-Z]/i.test(codeStr) && /[0-9]/.test(codeStr) || codeStr.includes('-') || codeStr.includes('_'));
-
-  if (isSerialPattern || /^SN-/i.test(codeStr) || /^OCR/i.test(codeStr)) {
-    return 'OCR Serial Number';
   }
 
   return 'Text';
@@ -238,6 +241,7 @@ export function ScanScreen({
 
   const [scans, setScans] = useState<ScanResult[]>([]);
   const [sessionScans, setSessionScans] = useState<ScanResult[]>([]);
+  const [selectedScanIds, setSelectedScanIds] = useState<Set<string>>(new Set());
 
   const saveScansToStorage = async (updatedScans: ScanResult[]) => {
     try {
@@ -363,11 +367,11 @@ export function ScanScreen({
     }
   };
 
-  const saveAndSubmitScan = (data: string, type: string) => {
+  const saveAndSubmitScan = async (data: string, type: string) => {
     const classification = classifyCodeLocally(data, type);
     const scannedDateFormatted = formatDigitalDateLocally(new Date());
     const extractedDate = extractDateFromCodeLocally(data);
-    const details = parseCodeDetailsLocally(data, type, classification);
+    let details = parseCodeDetailsLocally(data, type, classification);
     const redirectUrl = generateRedirectUrlLocally(data, classification);
 
     const newScan: ScanResult = {
@@ -393,11 +397,7 @@ export function ScanScreen({
       setSessionScans((prev) => [newScan, ...prev]);
     } else {
       setSingleScanResult(newScan);
-      if (newScan.redirectUrl) {
-        WebBrowser.openBrowserAsync(newScan.redirectUrl).catch((err) => {
-          console.warn('Could not open in-app browser:', err);
-        });
-      }
+      // Auto browser redirection removed to display scan result details first!
     }
 
     // Perform background DB logging and update status
@@ -405,19 +405,56 @@ export function ScanScreen({
       .then((response) => {
         const nextStatus: 'synced' | 'failed' = response.success ? 'synced' : 'failed';
         const serverId = response.data?.scanId;
+        const serverDetails = response.data?.details;
+        const serverRedirectUrl = response.data?.redirectUrl;
+        const serverClassification = response.data?.classification;
+
         setScans((prev) => {
           const updated: ScanResult[] = prev.map((item) =>
-            item.id === newScan.id ? ({ ...item, id: serverId || item.id, status: nextStatus } as ScanResult) : item
+            item.id === newScan.id
+              ? ({
+                  ...item,
+                  id: serverId || item.id,
+                  status: nextStatus,
+                  details: serverDetails || item.details,
+                  redirectUrl: serverRedirectUrl || item.redirectUrl,
+                  classification: serverClassification || item.classification,
+                } as ScanResult)
+              : item
           );
           saveScansToStorage(updated);
           return updated;
         });
+
         if (multiScanMode) {
           setSessionScans((prev) =>
             prev.map((item) =>
-              item.id === newScan.id ? ({ ...item, id: serverId || item.id, status: nextStatus } as ScanResult) : item
+              item.id === newScan.id
+                ? ({
+                    ...item,
+                    id: serverId || item.id,
+                    status: nextStatus,
+                    details: serverDetails || item.details,
+                    redirectUrl: serverRedirectUrl || item.redirectUrl,
+                    classification: serverClassification || item.classification,
+                  } as ScanResult)
+                : item
             )
           );
+        } else {
+          setSingleScanResult((prev) => {
+            if (prev && prev.id === newScan.id) {
+              return {
+                ...prev,
+                id: serverId || prev.id,
+                status: nextStatus,
+                details: serverDetails || prev.details,
+                redirectUrl: serverRedirectUrl || prev.redirectUrl,
+                classification: serverClassification || prev.classification,
+              };
+            }
+            return prev;
+          });
         }
       })
       .catch((err) => {
@@ -656,6 +693,399 @@ export function ScanScreen({
     ]);
   };
 
+  const handleToggleSelectScan = (id: string) => {
+    setSelectedScanIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const handleCreateSalesOrder = async () => {
+    if (selectedScanIds.size === 0) {
+      Alert.alert('No Scans Selected', 'Please select at least one scan log to create a sales order.');
+      return;
+    }
+
+    // Generate a 10-digit sales order number (first digit non-zero)
+    const firstDigit = Math.floor(Math.random() * 9) + 1; // 1-9
+    const restDigits = Math.floor(Math.random() * 1000000000).toString().padStart(9, '0');
+    const salesOrderNumber = `${firstDigit}${restDigits}`;
+
+    const selectedIdsArray = Array.from(selectedScanIds);
+
+    try {
+      // 1. Submit to server
+      const apiRes = await updateSalesOrder(selectedIdsArray, salesOrderNumber);
+      if (!apiRes.success) {
+        throw new Error(apiRes.error || 'Failed to update server.');
+      }
+
+      // 2. Update local state
+      const updatedScans = scans.map((scan) => {
+        if (selectedScanIds.has(scan.id)) {
+          return {
+            ...scan,
+            salesOrder: salesOrderNumber,
+          };
+        }
+        return scan;
+      });
+
+      setScans(updatedScans);
+      saveScansToStorage(updatedScans);
+
+      // 3. Clear selected set
+      setSelectedScanIds(new Set());
+
+      Alert.alert(
+        'Sales Order Created',
+        `Generated 10-digit Sales Order Number: ${salesOrderNumber}\nAssociated with ${selectedIdsArray.length} scan log(s).`
+      );
+    } catch (e: any) {
+      Alert.alert(
+        'Update Error',
+        `Failed to sync sales order with server: ${e.message || 'Unknown error'}. Storing locally instead.`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              // Fallback to local update
+              const updatedScans = scans.map((scan) => {
+                if (selectedScanIds.has(scan.id)) {
+                  return {
+                    ...scan,
+                    salesOrder: salesOrderNumber,
+                  };
+                }
+                return scan;
+              });
+
+              setScans(updatedScans);
+              saveScansToStorage(updatedScans);
+              setSelectedScanIds(new Set());
+            }
+          }
+        ]
+      );
+    }
+  };
+
+  const handleLiveQuerySerial = async (scan: ScanResult) => {
+    try {
+      const apiRes = await submitScan(scan.data, scan.type);
+      if (apiRes.success && apiRes.data) {
+        const serverDetails = apiRes.data.details;
+        const serverId = apiRes.data.scanId;
+        const serverRedirectUrl = apiRes.data.redirectUrl;
+        const serverClassification = apiRes.data.classification;
+
+        const updatedScan: ScanResult = {
+          ...scan,
+          id: serverId || scan.id,
+          details: serverDetails || scan.details,
+          redirectUrl: serverRedirectUrl || scan.redirectUrl,
+          classification: serverClassification || scan.classification,
+          status: 'synced',
+        };
+
+        setScans((prev) => {
+          const next = prev.map((s) => (s.id === scan.id ? updatedScan : s));
+          saveScansToStorage(next);
+          return next;
+        });
+
+        if (singleScanResult && singleScanResult.id === scan.id) {
+          setSingleScanResult(updatedScan);
+        }
+
+        if (selectedScanDetails && selectedScanDetails.id === scan.id) {
+          setSelectedScanDetails(updatedScan);
+        }
+
+        setSessionScans((prev) =>
+          prev.map((s) => (s.id === scan.id ? updatedScan : s))
+        );
+
+        if (serverDetails && serverDetails.serialApiData) {
+          const apiData = serverDetails.serialApiData;
+          Alert.alert(
+            'Database Lookup Successful',
+            `Product: ${apiData.product}\nStatus: ${apiData.status}\nSold to Party: ${apiData.soldToParty}\nShip to Party: ${apiData.shipToParty}`
+          );
+        } else {
+          Alert.alert('Lookup Succeeded', 'Serial queried, but no database records found.');
+        }
+      } else {
+        Alert.alert('Lookup Failed', apiRes.error || 'The serial number could not be found.');
+      }
+    } catch (e: any) {
+      Alert.alert('Network Error', e.message || 'Failed to connect to the database server.');
+    }
+  };
+
+  const renderScanDetailsModal = () => {
+    if (!selectedScanDetails) return null;
+    return (
+      <Modal
+        visible={selectedScanDetails !== null}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setSelectedScanDetails(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View
+            style={[
+              styles.modalContent,
+              {
+                backgroundColor: isDark ? '#0c101b' : '#ffffff',
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <View style={styles.modalHeader}>
+              <Text style={[styles.modalTitle, { color: colors.text }]}>Scanned Details</Text>
+              <TouchableOpacity
+                style={[styles.modalCloseBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }]}
+                onPress={() => setSelectedScanDetails(null)}
+              >
+                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }}>✕</Text>
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
+              {/* Main Data View */}
+              <View style={[styles.detailBlock, { backgroundColor: isDark ? '#131a26' : '#f8fafc', borderColor: colors.border }]}>
+                <Text style={[styles.detailBlockLabel, { color: colors.mutedText }]}>SCANNED CODE</Text>
+                <Text style={[styles.detailBlockData, { color: colors.text }]} selectable={true}>
+                  {selectedScanDetails.data}
+                </Text>
+              </View>
+
+              {/* General Info Table */}
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>General Properties</Text>
+              <View style={[styles.detailsTable, { borderColor: colors.border }]}>
+                <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                  <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Format</Text>
+                  <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.type}</Text>
+                </View>
+                {selectedScanDetails.classification && (
+                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Classification</Text>
+                    <View style={[styles.classBadge, { backgroundColor: getClassificationStyles(selectedScanDetails.classification).bg }]}>
+                      <Text style={[styles.classBadgeText, { color: getClassificationStyles(selectedScanDetails.classification).text }]}>
+                        {selectedScanDetails.classification}
+                      </Text>
+                    </View>
+                  </View>
+                )}
+                <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                  <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Scanned Date</Text>
+                  <Text style={[styles.tableValue, { color: colors.text }]}>
+                    {selectedScanDetails.scannedDateFormatted || new Date(selectedScanDetails.timestamp).toLocaleString()}
+                  </Text>
+                </View>
+                {selectedScanDetails.extractedDate && (
+                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Embedded Date</Text>
+                    <Text style={[styles.tableValue, { color: '#10b981', fontWeight: '700' }]}>
+                      📅 {selectedScanDetails.extractedDate}
+                    </Text>
+                  </View>
+                )}
+                {selectedScanDetails.salesOrder && (
+                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Sales Order</Text>
+                    <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
+                      🛒 {selectedScanDetails.salesOrder}
+                    </Text>
+                  </View>
+                )}
+                {selectedScanDetails.details?.length !== undefined && (
+                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Character Count</Text>
+                    <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.length} chars</Text>
+                  </View>
+                )}
+                {selectedScanDetails.details?.characterSet && (
+                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Character Set</Text>
+                    <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.characterSet}</Text>
+                  </View>
+                )}
+              </View>
+
+              {/* Rich Parsed Details */}
+              {selectedScanDetails.details && (
+                Object.keys(selectedScanDetails.details).some(k => !['length', 'characterSet'].includes(k))
+              ) && (
+                  <>
+                    <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Parsed Intelligence</Text>
+                    <View style={[styles.detailsTable, { borderColor: colors.border }]}>
+                      {selectedScanDetails.details.countryOfOrigin && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>GS1 Country of Origin</Text>
+                          <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
+                            {selectedScanDetails.details.countryOfOrigin}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.checkDigit !== undefined && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Check Digit</Text>
+                          <Text style={[styles.tableValue, { color: colors.text }]}>
+                            {selectedScanDetails.details.checkDigit}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.isCheckDigitValid !== undefined && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Checksum Verification</Text>
+                          <Text style={[styles.tableValue, { color: selectedScanDetails.details.isCheckDigitValid ? '#10b981' : '#f43f5e', fontWeight: '700' }]}>
+                            {selectedScanDetails.details.isCheckDigitValid ? '✓ Valid Checksum' : '✗ Invalid Checksum'}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.protocol && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Protocol</Text>
+                          <Text style={[styles.tableValue, { color: '#38bdf8', fontWeight: '700' }]}>
+                            {selectedScanDetails.details.protocol}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.host && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Host Domain</Text>
+                          <Text style={[styles.tableValue, { color: colors.text }]} numberOfLines={1}>
+                            {selectedScanDetails.details.host}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.path && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Path</Text>
+                          <Text style={[styles.tableValue, { color: colors.text }]} numberOfLines={1}>
+                            {selectedScanDetails.details.path}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.serialPrefix && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Prefix</Text>
+                          <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
+                            {selectedScanDetails.details.serialPrefix}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.serialBody && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Body</Text>
+                          <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
+                            {selectedScanDetails.details.serialBody}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.serialLetters && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Letters</Text>
+                          <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
+                            {selectedScanDetails.details.serialLetters}
+                          </Text>
+                        </View>
+                      )}
+                      {selectedScanDetails.details.serialDigits && (
+                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Digits</Text>
+                          <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
+                            {selectedScanDetails.details.serialDigits}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </>
+                )}
+
+              {/* Live Serial API Details in Modal */}
+              {selectedScanDetails.details?.serialApiData && (
+                selectedScanDetails.details.serialApiData.notFound ? (
+                  <>
+                    <Text style={[styles.sectionTitle, { color: '#f43f5e', marginTop: 20 }]}>API Serial Database Details</Text>
+                    <View style={{ backgroundColor: isDark ? 'rgba(244, 63, 94, 0.06)' : 'rgba(244, 63, 94, 0.05)', borderColor: 'rgba(244, 63, 94, 0.15)', borderWidth: 1, padding: 12, borderRadius: 12, marginTop: 8, flexDirection: 'row', alignItems: 'center' }}>
+                      <Text style={{ fontSize: 16, marginRight: 8 }}>⚠️</Text>
+                      <Text style={{ color: '#f43f5e', fontWeight: '700', fontSize: 13, flex: 1 }}>
+                        Serial number not found in SAP database.
+                      </Text>
+                    </View>
+                  </>
+                ) : (
+                  <>
+                    <Text style={[styles.sectionTitle, { color: '#ff682c', marginTop: 20 }]}>API Serial Database Details</Text>
+                    <View style={[styles.detailsTable, { borderColor: colors.border }]}>
+                      <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                        <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Product</Text>
+                        <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>{selectedScanDetails.details.serialApiData.product}</Text>
+                      </View>
+                      <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                        <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Status</Text>
+                        <Text style={[styles.tableValue, { color: '#10b981', fontWeight: '700' }]}>{selectedScanDetails.details.serialApiData.status}</Text>
+                      </View>
+                      <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                        <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Sold to Party</Text>
+                        <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.serialApiData.soldToParty}</Text>
+                      </View>
+                      <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
+                        <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Ship to Party</Text>
+                        <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.serialApiData.shipToParty}</Text>
+                      </View>
+                    </View>
+                  </>
+                )
+              )}
+
+              {/* Actions Panel inside Modal */}
+              <View style={styles.modalActionContainer}>
+                {selectedScanDetails.classification === 'OCR Serial Number' ? (
+                  <TouchableOpacity
+                    style={styles.modalOpenLinkBtn}
+                    onPress={() => handleLiveQuerySerial(selectedScanDetails)}
+                  >
+                    <Text style={styles.modalOpenLinkBtnText}>
+                      {selectedScanDetails.details?.serialApiData
+                        ? selectedScanDetails.details.serialApiData.notFound
+                          ? '🔄 Retry Query Database'
+                          : '🔄 Refresh Serial Database'
+                        : '🔍 Query Serial Database'}
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  !!selectedScanDetails.redirectUrl && (
+                    <TouchableOpacity
+                      style={styles.modalOpenLinkBtn}
+                      onPress={() => {
+                        if (selectedScanDetails.redirectUrl) {
+                          WebBrowser.openBrowserAsync(selectedScanDetails.redirectUrl).catch((err) => {
+                            console.warn('Could not open in-app browser:', err);
+                          });
+                        }
+                      }}
+                    >
+                      <Text style={styles.modalOpenLinkBtnText}>🔗 Open Lookup / Search Link</Text>
+                    </TouchableOpacity>
+                  )
+                )}
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
   // ----------------------------------------------------
   // FULL SCREEN LOGS VIEW (If showLogs === true)
   // ----------------------------------------------------
@@ -725,37 +1155,62 @@ export function ScanScreen({
           />
         </View>
 
-        {/* History List */}
-        <FlatList
-          data={filteredScans}
-          keyExtractor={(item) => item.id}
-          renderItem={({ item }) => (
-            <ScanHistoryCard
-              item={item}
-              theme={theme}
-              onPress={() => setSelectedScanDetails(item)}
-              onPressLink={() => {
-                if (item.redirectUrl) {
-                  WebBrowser.openBrowserAsync(item.redirectUrl).catch((err) => {
-                    console.warn('Could not open in-app browser:', err);
-                  });
-                }
-              }}
-            />
-          )}
-          contentContainerStyle={styles.listContent}
-          style={[styles.fullHistoryList, { backgroundColor: colors.logBg }]}
-          ListEmptyComponent={
-            <View style={styles.emptyContainer}>
-              <Text style={[styles.emptyText, { color: colors.mutedText }]}>
-                {searchQuery ? 'No matching scans found' : 'No recent scans'}
-              </Text>
-              <Text style={[styles.emptySubtext, { color: isDark ? '#334155' : '#64748b' }]}>
-                {searchQuery ? 'Try a different search term.' : 'Activate the camera to record serial numbers.'}
-              </Text>
-            </View>
-          }
-        />
+        {/* History List and Floating action button */}
+        <View style={{ flex: 1, position: 'relative' }}>
+          <FlatList
+            data={filteredScans}
+            keyExtractor={(item) => item.id}
+            renderItem={({ item }) => (
+              <ScanHistoryCard
+                item={item}
+                theme={theme}
+                selected={selectedScanIds.has(item.id)}
+                onToggleSelect={() => handleToggleSelectScan(item.id)}
+                onPress={() => setSelectedScanDetails(item)}
+                onPressLink={() => {
+                  if (item.redirectUrl) {
+                    WebBrowser.openBrowserAsync(item.redirectUrl).catch((err) => {
+                      console.warn('Could not open in-app browser:', err);
+                    });
+                  }
+                }}
+              />
+            )}
+            contentContainerStyle={styles.listContent}
+            style={[styles.fullHistoryList, { backgroundColor: colors.logBg }]}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Text style={[styles.emptyText, { color: colors.mutedText }]}>
+                  {searchQuery ? 'No matching scans found' : 'No recent scans'}
+                </Text>
+                <Text style={[styles.emptySubtext, { color: isDark ? '#334155' : '#64748b' }]}>
+                  {searchQuery ? 'Try a different search term.' : 'Activate the camera to record serial numbers.'}
+                </Text>
+              </View>
+            }
+          />
+          
+          <TouchableOpacity
+            style={[
+              styles.createSalesOrderBtn,
+              {
+                backgroundColor: selectedScanIds.size > 0 ? '#ff682c' : (isDark ? '#1e293b' : '#cbd5e1'),
+                borderColor: selectedScanIds.size > 0 ? '#ff7f4d' : (isDark ? '#334155' : '#94a3b8'),
+                opacity: selectedScanIds.size > 0 ? 1 : 0.6,
+              }
+            ]}
+            disabled={selectedScanIds.size === 0}
+            onPress={handleCreateSalesOrder}
+          >
+            <Text style={[
+              styles.createSalesOrderBtnText,
+              { color: selectedScanIds.size > 0 ? '#ffffff' : (isDark ? '#94a3b8' : '#64748b') }
+            ]}>
+              🛒 Create Sales Order {selectedScanIds.size > 0 ? `(${selectedScanIds.size})` : ''}
+            </Text>
+          </TouchableOpacity>
+        </View>
+        {renderScanDetailsModal()}
       </SafeAreaView>
     );
   }
@@ -897,6 +1352,13 @@ export function ScanScreen({
                     <Text style={[styles.resultValue, { color: colors.text }]}>{singleScanResult.scannedDateFormatted || new Date(singleScanResult.timestamp).toLocaleString()}</Text>
                   </View>
 
+                  {!!singleScanResult.salesOrder && (
+                    <View style={styles.resultRow}>
+                      <Text style={[styles.resultLabel, { color: colors.mutedText }]}>Sales Order:</Text>
+                      <Text style={[styles.resultValue, { color: '#ff682c', fontWeight: '700' }]}>🛒 {singleScanResult.salesOrder}</Text>
+                    </View>
+                  )}
+
                   {/* Metadata Intelligence Panel */}
                   {singleScanResult.details && (
                     Object.keys(singleScanResult.details).some(k => !['length', 'characterSet'].includes(k))
@@ -935,24 +1397,73 @@ export function ScanScreen({
                             <Text style={[styles.resultValue, { color: colors.text }]}>{singleScanResult.details.serialBody}</Text>
                           </View>
                         )}
+                        {/* Live Serial API Details */}
+                        {singleScanResult.details?.serialApiData && (
+                          singleScanResult.details.serialApiData.notFound ? (
+                            <View style={{ marginTop: 12, borderTopWidth: 1, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)', paddingTop: 8 }}>
+                              <Text style={[styles.resultIntelTitle, { color: '#f43f5e', marginBottom: 6 }]}>API SERIAL DATABASE DETAILS</Text>
+                              <View style={{ backgroundColor: isDark ? 'rgba(244, 63, 94, 0.06)' : 'rgba(244, 63, 94, 0.05)', borderColor: 'rgba(244, 63, 94, 0.15)', borderWidth: 1, padding: 10, borderRadius: 10, flexDirection: 'row', alignItems: 'center' }}>
+                                <Text style={{ fontSize: 14, marginRight: 6 }}>⚠️</Text>
+                                <Text style={{ color: '#f43f5e', fontWeight: '700', fontSize: 12, flex: 1 }}>
+                                  Serial number not found in SAP database.
+                                </Text>
+                              </View>
+                            </View>
+                          ) : (
+                            <View style={{ marginTop: 12, borderTopWidth: 1, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)', paddingTop: 8 }}>
+                              <Text style={[styles.resultIntelTitle, { color: '#ff682c', marginBottom: 6 }]}>API SERIAL DATABASE DETAILS</Text>
+                              <View style={styles.resultRow}>
+                                <Text style={[styles.resultLabel, { color: colors.mutedText }]}>Product:</Text>
+                                <Text style={[styles.resultValue, { color: colors.text, fontWeight: '700' }]}>{singleScanResult.details.serialApiData.product}</Text>
+                              </View>
+                              <View style={styles.resultRow}>
+                                <Text style={[styles.resultLabel, { color: colors.mutedText }]}>Status:</Text>
+                                <Text style={[styles.resultValue, { color: '#10b981', fontWeight: '700' }]}>{singleScanResult.details.serialApiData.status}</Text>
+                              </View>
+                              <View style={styles.resultRow}>
+                                <Text style={[styles.resultLabel, { color: colors.mutedText }]}>Sold to Party:</Text>
+                                <Text style={[styles.resultValue, { color: colors.text }]}>{singleScanResult.details.serialApiData.soldToParty}</Text>
+                              </View>
+                              <View style={styles.resultRow}>
+                                <Text style={[styles.resultLabel, { color: colors.mutedText }]}>Ship to Party:</Text>
+                                <Text style={[styles.resultValue, { color: colors.text }]}>{singleScanResult.details.serialApiData.shipToParty}</Text>
+                              </View>
+                            </View>
+                          )
+                        )}
                       </View>
                     )}
                 </View>
-
+ 
                 {/* Main Link/Redirect Action Button */}
-                {!!singleScanResult.redirectUrl && (
+                {singleScanResult.classification === 'OCR Serial Number' ? (
                   <TouchableOpacity
                     style={styles.openLinkBtn}
-                    onPress={() => {
-                      if (singleScanResult.redirectUrl) {
-                        WebBrowser.openBrowserAsync(singleScanResult.redirectUrl).catch((err) => {
-                          console.warn('Could not open in-app browser:', err);
-                        });
-                      }
-                    }}
+                    onPress={() => handleLiveQuerySerial(singleScanResult)}
                   >
-                    <Text style={styles.openLinkBtnText}>🔗 Open Lookup / Search Link</Text>
+                    <Text style={styles.openLinkBtnText}>
+                      {singleScanResult.details?.serialApiData
+                        ? singleScanResult.details.serialApiData.notFound
+                          ? '🔄 Retry Query Database'
+                          : '🔄 Refresh Serial Database'
+                        : '🔍 Query Serial Database'}
+                    </Text>
                   </TouchableOpacity>
+                ) : (
+                  !!singleScanResult.redirectUrl && (
+                    <TouchableOpacity
+                      style={styles.openLinkBtn}
+                      onPress={() => {
+                        if (singleScanResult.redirectUrl) {
+                          WebBrowser.openBrowserAsync(singleScanResult.redirectUrl).catch((err) => {
+                            console.warn('Could not open in-app browser:', err);
+                          });
+                        }
+                      }}
+                    >
+                      <Text style={styles.openLinkBtnText}>🔗 Open Lookup / Search Link</Text>
+                    </TouchableOpacity>
+                  )
                 )}
 
                 <TouchableOpacity
@@ -1009,8 +1520,11 @@ export function ScanScreen({
                           {!!item.extractedDate && (
                             <Text style={styles.batchItemDateText}>📅 {item.extractedDate}</Text>
                           )}
+                          {!!item.salesOrder && (
+                            <Text style={[styles.batchItemDateText, { color: '#ff682c', marginLeft: 8 }]}>🛒 {item.salesOrder}</Text>
+                          )}
                         </View>
-                        {item.redirectUrl ? (
+                        {item.classification === 'Web Link' ? (
                           <TouchableOpacity
                             onPress={(e) => {
                               e.stopPropagation();
@@ -1030,6 +1544,26 @@ export function ScanScreen({
                           <Text style={[styles.batchItemValueText, { color: colors.text }]} numberOfLines={1}>
                             {item.data}
                           </Text>
+                        )}
+
+                        {/* Display live API serial info directly in batch list */}
+                        {item.details?.serialApiData && (
+                          item.details.serialApiData.notFound ? (
+                            <View style={{ marginTop: 6, padding: 6, borderRadius: 6, backgroundColor: isDark ? 'rgba(244, 63, 94, 0.04)' : 'rgba(244, 63, 94, 0.06)', borderWidth: 1, borderColor: 'rgba(244, 63, 94, 0.12)' }}>
+                              <Text style={{ fontSize: 10, fontWeight: '700', color: '#f43f5e' }}>
+                                ⚠️ Serial number not found in SAP database
+                              </Text>
+                            </View>
+                          ) : (
+                            <View style={{ marginTop: 6, padding: 6, borderRadius: 6, backgroundColor: isDark ? 'rgba(255, 104, 44, 0.04)' : 'rgba(255, 104, 44, 0.06)', borderWidth: 1, borderColor: 'rgba(255, 104, 44, 0.12)' }}>
+                              <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#f8fafc' : '#0f172a' }}>
+                                📦 {item.details.serialApiData.product}
+                              </Text>
+                              <Text style={{ fontSize: 10, color: colors.mutedText, marginTop: 1 }}>
+                                Status: {item.details.serialApiData.status} • Sold to: {item.details.serialApiData.soldToParty}
+                              </Text>
+                            </View>
+                          )
                         )}
                       </View>
                       <Text style={{ color: '#ff682c', fontSize: 12, fontWeight: '700' }}>📄 Details →</Text>
@@ -1130,202 +1664,7 @@ export function ScanScreen({
           </Text>
         </TouchableOpacity>
       </View>
-
-      {/* Scan Details Modal */}
-      <Modal
-        visible={selectedScanDetails !== null}
-        transparent={true}
-        animationType="slide"
-        onRequestClose={() => setSelectedScanDetails(null)}
-      >
-        <View style={styles.modalOverlay}>
-          <View
-            style={[
-              styles.modalContent,
-              {
-                backgroundColor: isDark ? '#0c101b' : '#ffffff',
-                borderColor: colors.border,
-              },
-            ]}
-          >
-            <View style={styles.modalHeader}>
-              <Text style={[styles.modalTitle, { color: colors.text }]}>Scanned Details</Text>
-              <TouchableOpacity
-                style={[styles.modalCloseBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }]}
-                onPress={() => setSelectedScanDetails(null)}
-              >
-                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }}>✕</Text>
-              </TouchableOpacity>
-            </View>
-
-            {selectedScanDetails && (
-              <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
-                {/* Main Data View */}
-                <View style={[styles.detailBlock, { backgroundColor: isDark ? '#131a26' : '#f8fafc', borderColor: colors.border }]}>
-                  <Text style={[styles.detailBlockLabel, { color: colors.mutedText }]}>SCANNED CODE</Text>
-                  <Text style={[styles.detailBlockData, { color: colors.text }]} selectable={true}>
-                    {selectedScanDetails.data}
-                  </Text>
-                </View>
-
-                {/* General Info Table */}
-                <Text style={[styles.sectionTitle, { color: colors.text }]}>General Properties</Text>
-                <View style={[styles.detailsTable, { borderColor: colors.border }]}>
-                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Format</Text>
-                    <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.type}</Text>
-                  </View>
-                  {selectedScanDetails.classification && (
-                    <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                      <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Classification</Text>
-                      <View style={[styles.classBadge, { backgroundColor: getClassificationStyles(selectedScanDetails.classification).bg }]}>
-                        <Text style={[styles.classBadgeText, { color: getClassificationStyles(selectedScanDetails.classification).text }]}>
-                          {selectedScanDetails.classification}
-                        </Text>
-                      </View>
-                    </View>
-                  )}
-                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Scanned Date</Text>
-                    <Text style={[styles.tableValue, { color: colors.text }]}>
-                      {selectedScanDetails.scannedDateFormatted || new Date(selectedScanDetails.timestamp).toLocaleString()}
-                    </Text>
-                  </View>
-                  {selectedScanDetails.extractedDate && (
-                    <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                      <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Embedded Date</Text>
-                      <Text style={[styles.tableValue, { color: '#10b981', fontWeight: '700' }]}>
-                        📅 {selectedScanDetails.extractedDate}
-                      </Text>
-                    </View>
-                  )}
-                  {selectedScanDetails.details?.length !== undefined && (
-                    <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                      <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Character Count</Text>
-                      <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.length} chars</Text>
-                    </View>
-                  )}
-                  {selectedScanDetails.details?.characterSet && (
-                    <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                      <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Character Set</Text>
-                      <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.characterSet}</Text>
-                    </View>
-                  )}
-                </View>
-
-                {/* Rich Parsed Details */}
-                {selectedScanDetails.details && (
-                  Object.keys(selectedScanDetails.details).some(k => !['length', 'characterSet'].includes(k))
-                ) && (
-                    <>
-                      <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Parsed Intelligence</Text>
-                      <View style={[styles.detailsTable, { borderColor: colors.border }]}>
-                        {selectedScanDetails.details.countryOfOrigin && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>GS1 Country of Origin</Text>
-                            <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
-                              {selectedScanDetails.details.countryOfOrigin}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.checkDigit !== undefined && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Check Digit</Text>
-                            <Text style={[styles.tableValue, { color: colors.text }]}>
-                              {selectedScanDetails.details.checkDigit}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.isCheckDigitValid !== undefined && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Checksum Verification</Text>
-                            <Text style={[styles.tableValue, { color: selectedScanDetails.details.isCheckDigitValid ? '#10b981' : '#f43f5e', fontWeight: '700' }]}>
-                              {selectedScanDetails.details.isCheckDigitValid ? '✓ Valid Checksum' : '✗ Invalid Checksum'}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.protocol && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Protocol</Text>
-                            <Text style={[styles.tableValue, { color: '#38bdf8', fontWeight: '700' }]}>
-                              {selectedScanDetails.details.protocol}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.host && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Host Domain</Text>
-                            <Text style={[styles.tableValue, { color: colors.text }]} numberOfLines={1}>
-                              {selectedScanDetails.details.host}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.path && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Path</Text>
-                            <Text style={[styles.tableValue, { color: colors.text }]} numberOfLines={1}>
-                              {selectedScanDetails.details.path}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.serialPrefix && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Prefix</Text>
-                            <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
-                              {selectedScanDetails.details.serialPrefix}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.serialBody && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Body</Text>
-                            <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
-                              {selectedScanDetails.details.serialBody}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.serialLetters && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Letters</Text>
-                            <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
-                              {selectedScanDetails.details.serialLetters}
-                            </Text>
-                          </View>
-                        )}
-                        {selectedScanDetails.details.serialDigits && (
-                          <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                            <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Digits</Text>
-                            <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
-                              {selectedScanDetails.details.serialDigits}
-                            </Text>
-                          </View>
-                        )}
-                      </View>
-                    </>
-                  )}
-
-                {/* Actions Panel inside Modal */}
-                <View style={styles.modalActionContainer}>
-                  {!!selectedScanDetails.redirectUrl && (
-                    <TouchableOpacity
-                      style={styles.modalOpenLinkBtn}
-                      onPress={() => {
-                        if (selectedScanDetails.redirectUrl) {
-                          WebBrowser.openBrowserAsync(selectedScanDetails.redirectUrl).catch((err) => {
-                            console.warn('Could not open in-app browser:', err);
-                          });
-                        }
-                      }}
-                    >
-                      <Text style={styles.modalOpenLinkBtnText}>🔗 Open Lookup / Search Link</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
-              </ScrollView>
-            )}
-          </View>
-        </View>
-      </Modal>
+      {renderScanDetailsModal()}
     </SafeAreaView>
   );
 }
@@ -1585,7 +1924,7 @@ const styles = StyleSheet.create({
   },
   listContent: {
     paddingHorizontal: 20,
-    paddingBottom: 24,
+    paddingBottom: 90,
     paddingTop: 12,
   },
   emptyContainer: {
@@ -1929,5 +2268,27 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 11,
     fontWeight: '700',
+  },
+  createSalesOrderBtn: {
+    position: 'absolute',
+    bottom: 24,
+    right: 20,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 24,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  createSalesOrderBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 0.2,
   },
 });

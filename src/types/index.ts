@@ -9,6 +9,7 @@ export interface ScanResult {
   extractedDate?: string | null;
   redirectUrl?: string | null;
   details?: any;
+  salesOrder?: string;
 }
 
 export interface ScannerState {

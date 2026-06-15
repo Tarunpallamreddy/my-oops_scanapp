@@ -27,4 +27,20 @@ export const scanApi = {
       method: 'GET',
     });
   },
+
+  /**
+   * Updates scans with a generated 10-digit Sales Order number.
+   */
+  updateSalesOrder: async (
+    scanIds: string[],
+    salesOrder: string
+  ): Promise<ApiResponse<{ success: boolean }>> => {
+    return apiClient<{ success: boolean }>('/scans/sales-order', {
+      method: 'POST',
+      body: JSON.stringify({
+        scanIds,
+        salesOrder,
+      }),
+    });
+  },
 };

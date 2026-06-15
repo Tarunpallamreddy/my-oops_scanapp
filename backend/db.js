@@ -43,6 +43,16 @@ async function getPool() {
     `;
     await pool.request().query(createTableQuery);
     console.log('[Database] Scans table checked/initialized in SQL Server.');
+
+    // Verify and add salesOrder column if it doesn't exist
+    const checkAlterQuery = `
+      IF EXISTS (SELECT * FROM sysobjects WHERE name='Scans' AND xtype='U')
+      AND NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Scans') AND name = 'salesOrder')
+      BEGIN
+        ALTER TABLE Scans ADD salesOrder VARCHAR(50);
+      END
+    `;
+    await pool.request().query(checkAlterQuery);
     
     return pool;
   } catch (err) {
@@ -89,8 +99,8 @@ module.exports = {
       
       // Insert new scan
       const insertQuery = `
-        INSERT INTO Scans (id, data, type, timestamp, status, classification, scannedDateFormatted, extractedDate, redirectUrl, details)
-        VALUES (@id, @data, @type, @timestamp, @status, @classification, @scannedDateFormatted, @extractedDate, @redirectUrl, @details)
+        INSERT INTO Scans (id, data, type, timestamp, status, classification, scannedDateFormatted, extractedDate, redirectUrl, details, salesOrder)
+        VALUES (@id, @data, @type, @timestamp, @status, @classification, @scannedDateFormatted, @extractedDate, @redirectUrl, @details, @salesOrder)
       `;
       
       await dbPool.request()
@@ -104,6 +114,7 @@ module.exports = {
         .input('extractedDate', sql.VarChar(50), scan.extractedDate || null)
         .input('redirectUrl', sql.NVarChar(sql.MAX), scan.redirectUrl || null)
         .input('details', sql.NVarChar(sql.MAX), scan.details ? JSON.stringify(scan.details) : null)
+        .input('salesOrder', sql.VarChar(50), scan.salesOrder || null)
         .query(insertQuery);
         
       console.log(`[Database] Scanned item saved to SQL Server: ${scan.data}`);
@@ -124,6 +135,35 @@ module.exports = {
     } catch (err) {
       console.error('[Database] Clear failed in SQL Server:', err.message);
       return false;
+    }
+  },
+
+  // Update sales order on a list of scans
+  async updateSalesOrder(scanIds, salesOrder) {
+    try {
+      const dbPool = await getPool();
+      const request = dbPool.request();
+      request.input('salesOrder', sql.VarChar(50), salesOrder);
+      
+      const idParams = [];
+      scanIds.forEach((id, index) => {
+        const paramName = `id_${index}`;
+        request.input(paramName, sql.VarChar(50), id);
+        idParams.push(`@${paramName}`);
+      });
+      
+      const updateQuery = `
+        UPDATE Scans 
+        SET salesOrder = @salesOrder 
+        WHERE id IN (${idParams.join(', ')})
+      `;
+      
+      await request.query(updateQuery);
+      console.log(`[Database] Updated sales order ${salesOrder} for ${scanIds.length} scans.`);
+      return true;
+    } catch (err) {
+      console.error('[Database] Failed to update sales order in SQL Server:', err.message);
+      throw err;
     }
   }
 };
