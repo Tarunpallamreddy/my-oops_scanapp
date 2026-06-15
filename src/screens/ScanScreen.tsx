@@ -234,6 +234,7 @@ export function ScanScreen({
   // Refs for synchronous checks to prevent duplicate scans on rapid camera frames
   const lastScannedCodeRef = React.useRef<string>('');
   const lastScannedTimeRef = React.useRef<number>(0);
+  const isAlertShowingRef = React.useRef<boolean>(false);
 
   const [scans, setScans] = useState<ScanResult[]>([]);
   const [sessionScans, setSessionScans] = useState<ScanResult[]>([]);
@@ -253,49 +254,64 @@ export function ScanScreen({
         if (stored) {
           const parsed = JSON.parse(stored);
           setScans(parsed);
+          
+          // 2. Fetch latest scans from server and merge them
+          getScanHistory()
+            .then((response) => {
+              if (response.success && response.data) {
+                setScans((currentScans) => {
+                  const serverScans = response.data || [];
+                  const mergedMap = new Map<string, ScanResult>();
+                  
+                  // First add all server scans (which are synced)
+                  serverScans.forEach(s => {
+                    mergedMap.set(s.id, { ...s, status: 'synced' });
+                  });
+                  
+                  // Add local scans (preserving any pending/failed states)
+                  currentScans.forEach(s => {
+                    if (!mergedMap.has(s.id)) {
+                      mergedMap.set(s.id, s);
+                    } else if (s.status !== 'synced') {
+                      mergedMap.set(s.id, { ...s, status: 'synced' });
+                    }
+                  });
+
+                  const mergedList = Array.from(mergedMap.values()).sort(
+                    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+                  );
+
+                  // Update local storage with the merged results
+                  AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(mergedList)).catch(e => {
+                    console.warn('Failed to save merged scans to AsyncStorage:', e);
+                  });
+
+                  return mergedList;
+                });
+              }
+            })
+            .catch((err) => {
+              console.warn('Failed to load scan history from server:', err);
+            });
+        } else {
+          // If no local scans exist, fetch from server directly
+          getScanHistory()
+            .then((response) => {
+              if (response.success && response.data) {
+                const serverScans = response.data || [];
+                setScans(serverScans);
+                AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(serverScans)).catch(e => {
+                  console.warn('Failed to save scans to AsyncStorage:', e);
+                });
+              }
+            })
+            .catch((err) => {
+              console.warn('Failed to load scan history from server:', err);
+            });
         }
       })
       .catch((err) => {
         console.warn('Failed to load local scans from AsyncStorage:', err);
-      });
-
-    // 2. Fetch latest scans from server and merge them
-    getScanHistory()
-      .then((response) => {
-        if (response.success && response.data) {
-          setScans((prev) => {
-            const serverScans = response.data || [];
-            const mergedMap = new Map<string, ScanResult>();
-            
-            // First add all server scans (which are synced)
-            serverScans.forEach(s => {
-              mergedMap.set(s.id, { ...s, status: 'synced' });
-            });
-            
-            // Add local scans (preserving any pending/failed states)
-            prev.forEach(s => {
-              if (!mergedMap.has(s.id)) {
-                mergedMap.set(s.id, s);
-              } else if (s.status !== 'synced') {
-                mergedMap.set(s.id, { ...s, status: 'synced' });
-              }
-            });
-
-            const mergedList = Array.from(mergedMap.values()).sort(
-              (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-            );
-
-            // Update local storage with the merged results
-            AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(mergedList)).catch(e => {
-              console.warn('Failed to save merged scans to AsyncStorage:', e);
-            });
-
-            return mergedList;
-          });
-        }
-      })
-      .catch((err) => {
-        console.warn('Failed to load scan history from server:', err);
       });
   }, []);
 
@@ -347,43 +363,7 @@ export function ScanScreen({
     }
   };
 
-  const handleBarcodeScanned = async (result: { type: string; data: string }) => {
-    const { type, data } = result;
-    const now = Date.now();
-
-    if (multiScanMode) {
-      // Prevent duplicates in the current active camera session.
-      if (sessionScannedCodesRef.current.has(data)) {
-        return;
-      }
-      sessionScannedCodesRef.current.add(data);
-      const count = sessionScannedCodesRef.current.size;
-      setSessionScanCount(count);
-
-      setToastMessage(`Scanned ${type}: ${data} (#${count} in batch)`);
-    } else {
-      // Prevent duplicate scans of the SAME barcode within a 2-second cooldown window.
-      // We check the refs synchronously since React state updates are asynchronous.
-      if (data === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 2000) {
-        return;
-      }
-      lastScannedCodeRef.current = data;
-      lastScannedTimeRef.current = now;
-
-      // Update state for rendering/history
-      setLastScannedCode(data);
-      setLastScannedTime(now);
-
-      // Stop camera feed immediately in single scan mode
-      setIsCameraActive(false);
-      setToastMessage('');
-    }
-
-    // Reset toast message after 2.2 seconds
-    const timer = setTimeout(() => {
-      setToastMessage('');
-    }, 2200);
-
+  const saveAndSubmitScan = (data: string, type: string) => {
     const classification = classifyCodeLocally(data, type);
     const scannedDateFormatted = formatDigitalDateLocally(new Date());
     const extractedDate = extractDateFromCodeLocally(data);
@@ -424,9 +404,10 @@ export function ScanScreen({
     submitScan(newScan.data, newScan.type)
       .then((response) => {
         const nextStatus: 'synced' | 'failed' = response.success ? 'synced' : 'failed';
+        const serverId = response.data?.scanId;
         setScans((prev) => {
           const updated: ScanResult[] = prev.map((item) =>
-            item.id === newScan.id ? ({ ...item, status: nextStatus } as ScanResult) : item
+            item.id === newScan.id ? ({ ...item, id: serverId || item.id, status: nextStatus } as ScanResult) : item
           );
           saveScansToStorage(updated);
           return updated;
@@ -434,7 +415,7 @@ export function ScanScreen({
         if (multiScanMode) {
           setSessionScans((prev) =>
             prev.map((item) =>
-              item.id === newScan.id ? ({ ...item, status: nextStatus } as ScanResult) : item
+              item.id === newScan.id ? ({ ...item, id: serverId || item.id, status: nextStatus } as ScanResult) : item
             )
           );
         }
@@ -455,6 +436,106 @@ export function ScanScreen({
           );
         }
       });
+  };
+
+  const handleBarcodeScanned = async (result: { type: string; data: string }) => {
+    const { type, data } = result;
+    const now = Date.now();
+
+    // Prevent duplicate processing if a duplicate alert dialog is active
+    if (isAlertShowingRef.current) {
+      return;
+    }
+
+    if (multiScanMode) {
+      // Prevent duplicates in the current active camera session.
+      if (sessionScannedCodesRef.current.has(data)) {
+        return;
+      }
+    } else {
+      // Prevent duplicate scans of the SAME barcode within a 2-second cooldown window.
+      // We check the refs synchronously since React state updates are asynchronous.
+      if (data === lastScannedCodeRef.current && now - lastScannedTimeRef.current < 2000) {
+        return;
+      }
+      lastScannedCodeRef.current = data;
+      lastScannedTimeRef.current = now;
+    }
+
+    // Check if the barcode was already scanned (exists in historical list)
+    const isDuplicate = scans.some((item) => item.data === data);
+    if (isDuplicate) {
+      isAlertShowingRef.current = true;
+      
+      // Pause camera feed in single mode to allow user to handle the popup
+      if (!multiScanMode) {
+        setIsCameraActive(false);
+      }
+
+      Alert.alert(
+        'Duplicate Barcode Detected',
+        `The barcode:\n"${data}"\nhas already been scanned.\n\nDo you want to save it anyway?`,
+        [
+          {
+            text: 'Deny (Don\'t Save)',
+            style: 'cancel',
+            onPress: () => {
+              isAlertShowingRef.current = false;
+              // Reset the duplicate tracker refs so the camera can scan new codes
+              lastScannedCodeRef.current = '';
+              lastScannedTimeRef.current = 0;
+            }
+          },
+          {
+            text: 'Allow (Save Duplicate)',
+            style: 'default',
+            onPress: () => {
+              isAlertShowingRef.current = false;
+              
+              if (multiScanMode) {
+                sessionScannedCodesRef.current.add(data);
+                const count = sessionScannedCodesRef.current.size;
+                setSessionScanCount(count);
+                setToastMessage(`Scanned duplicate ${type}: ${data} (#${count} in batch)`);
+              } else {
+                setLastScannedCode(data);
+                setLastScannedTime(Date.now());
+                setToastMessage('');
+              }
+
+              // Reset toast message after 2.2 seconds
+              setTimeout(() => {
+                setToastMessage('');
+              }, 2200);
+
+              saveAndSubmitScan(data, type);
+            }
+          }
+        ],
+        { cancelable: false }
+      );
+      return;
+    }
+
+    // Non-duplicate scanning path
+    if (multiScanMode) {
+      sessionScannedCodesRef.current.add(data);
+      const count = sessionScannedCodesRef.current.size;
+      setSessionScanCount(count);
+      setToastMessage(`Scanned ${type}: ${data} (#${count} in batch)`);
+    } else {
+      setLastScannedCode(data);
+      setLastScannedTime(now);
+      setIsCameraActive(false);
+      setToastMessage('');
+    }
+
+    // Reset toast message after 2.2 seconds
+    setTimeout(() => {
+      setToastMessage('');
+    }, 2200);
+
+    saveAndSubmitScan(data, type);
   };
 
   const handleToggleCamera = async () => {
@@ -515,29 +596,31 @@ export function ScanScreen({
         const response = await submitScan(scan.data, scan.type);
         if (response.success) {
           successCount++;
+          const serverId = response.data?.scanId;
           updatedScans = updatedScans.map((item) =>
             item.id === scan.id
-              ? {
+              ? ({
                 ...item,
+                id: serverId || item.id,
                 status: 'synced',
                 classification: response.data?.classification,
                 scannedDateFormatted: response.data?.scannedDateFormatted,
                 extractedDate: response.data?.extractedDate,
                 redirectUrl: response.data?.redirectUrl,
                 details: response.data?.details,
-              }
+              } as ScanResult)
               : item
           );
         } else {
           lastError = response.error || 'Unknown server rejection';
           updatedScans = updatedScans.map((item) =>
-            item.id === scan.id ? { ...item, status: 'failed' } : item
+            item.id === scan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
           );
         }
       } catch (e: any) {
         lastError = e.message || 'Network error';
         updatedScans = updatedScans.map((item) =>
-          item.id === scan.id ? { ...item, status: 'failed' } : item
+          item.id === scan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
         );
       }
     }
@@ -688,25 +771,10 @@ export function ScanScreen({
       <View style={[styles.header, { backgroundColor: colors.headerBg, borderColor: colors.border }]}>
         <Text style={[styles.headerTitle, { color: colors.text }]}>MyGo Scan</Text>
         <View style={styles.headerActionRow}>
-          {isCameraActive && (
-            <TouchableOpacity
-              style={[
-                styles.headerButton,
-                flash && styles.headerButtonActive,
-                !isDark && !flash && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' },
-              ]}
-              onPress={() => setFlash(!flash)}
-            >
-              <Text style={[styles.headerButtonText, flash && styles.headerButtonTextActive]}>
-                {flash ? '🔦 On' : '🔦 Off'}
-              </Text>
-            </TouchableOpacity>
-          )}
           {/* Settings Symbol Trigger */}
           <TouchableOpacity
             style={[
               styles.headerButton,
-              { marginLeft: 8 },
               !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' },
             ]}
             onPress={onOpenSettings}
@@ -770,7 +838,10 @@ export function ScanScreen({
             }}
             onBarcodeScanned={handleBarcodeScanned}
           >
-            <ScannerOverlay />
+            <ScannerOverlay
+              flash={flash}
+              onToggleFlash={() => setFlash(!flash)}
+            />
 
             {/* Notification Toast */}
             {!!toastMessage && (

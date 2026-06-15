@@ -1,10 +1,15 @@
 import React, { useEffect, useRef } from 'react';
-import { StyleSheet, View, Text, Animated, Easing, Dimensions } from 'react-native';
+import { StyleSheet, View, Text, Animated, Easing, Dimensions, TouchableOpacity } from 'react-native';
 
 const { width } = Dimensions.get('window');
 const TARGET_SIZE = width * 0.7;
 
-export function ScannerOverlay() {
+interface ScannerOverlayProps {
+  flash?: boolean;
+  onToggleFlash?: () => void;
+}
+
+export function ScannerOverlay({ flash = false, onToggleFlash }: ScannerOverlayProps) {
   const lineAnim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -66,7 +71,20 @@ export function ScannerOverlay() {
         </View>
 
         {/* Right Mask */}
-        <View style={style.mask} />
+        <View style={[style.mask, style.rightMask]}>
+          {onToggleFlash && (
+            <TouchableOpacity
+              activeOpacity={0.8}
+              style={[
+                style.flashBtn,
+                flash && style.flashBtnActive
+              ]}
+              onPress={onToggleFlash}
+            >
+              <Text style={style.flashIcon}>{flash ? '🔦' : '💡'}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
 
       {/* Bottom Mask */}
@@ -169,5 +187,31 @@ const style = StyleSheet.create({
     fontSize: 13,
     textAlign: 'center',
     marginTop: 8,
+  },
+  rightMask: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  flashBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(9, 13, 22, 0.85)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 6,
+  },
+  flashBtnActive: {
+    backgroundColor: '#ff682c',
+    borderColor: 'rgba(255, 255, 255, 0.35)',
+  },
+  flashIcon: {
+    fontSize: 18,
   },
 });
