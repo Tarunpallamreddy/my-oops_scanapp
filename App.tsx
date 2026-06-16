@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { ScanScreen } from './src/screens/ScanScreen';
 import { Settings } from './src/screens/Settings';
 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<'Scan' | 'Settings'>('Scan');
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(true);
   
   // Shared config states
   const [profileName, setProfileName] = useState<string>('Tarun Saiteja');
@@ -13,6 +14,7 @@ export default function App() {
   const [theme, setTheme] = useState<'dark' | 'light'>('dark');
 
   // If not authenticated, force the beautiful login screen
+  /*
   if (!isAuthenticated) {
     return (
       <LoginScreen
@@ -25,31 +27,40 @@ export default function App() {
       />
     );
   }
+  */
 
-  if (currentScreen === 'Settings') {
+  const renderContent = () => {
+    if (currentScreen === 'Settings') {
+      return (
+        <Settings
+          profileName={profileName}
+          setProfileName={setProfileName}
+          profileEmail={profileEmail}
+          setProfileEmail={setProfileEmail}
+          theme={theme}
+          setTheme={setTheme}
+          onClose={() => setCurrentScreen('Scan')}
+          onLogout={() => {
+            setIsAuthenticated(false);
+            setCurrentScreen('Scan');
+          }}
+        />
+      );
+    }
+
     return (
-      <Settings
+      <ScanScreen
         profileName={profileName}
-        setProfileName={setProfileName}
         profileEmail={profileEmail}
-        setProfileEmail={setProfileEmail}
         theme={theme}
-        setTheme={setTheme}
-        onClose={() => setCurrentScreen('Scan')}
-        onLogout={() => {
-          setIsAuthenticated(false);
-          setCurrentScreen('Scan');
-        }}
+        onOpenSettings={() => setCurrentScreen('Settings')}
       />
     );
-  }
+  };
 
   return (
-    <ScanScreen
-      profileName={profileName}
-      profileEmail={profileEmail}
-      theme={theme}
-      onOpenSettings={() => setCurrentScreen('Settings')}
-    />
+    <SafeAreaProvider>
+      {renderContent()}
+    </SafeAreaProvider>
   );
 }

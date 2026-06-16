@@ -74,6 +74,7 @@ export function ScanHistoryCard({
       {onToggleSelect && (
         <TouchableOpacity
           activeOpacity={0.6}
+          disabled={!!item.salesOrder}
           style={styles.checkboxContainer}
           onPress={(e) => {
             e.stopPropagation();
@@ -84,12 +85,18 @@ export function ScanHistoryCard({
             style={[
               styles.checkbox,
               {
-                borderColor: selected
+                borderColor: item.salesOrder
+                  ? (isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)')
+                  : selected
                   ? '#ff682c'
                   : isDark
                   ? 'rgba(255, 255, 255, 0.25)'
                   : 'rgba(0, 0, 0, 0.25)',
-                backgroundColor: selected ? '#ff682c' : 'transparent',
+                backgroundColor: item.salesOrder
+                  ? (isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.04)')
+                  : selected
+                  ? '#ff682c'
+                  : 'transparent',
               },
             ]}
           >

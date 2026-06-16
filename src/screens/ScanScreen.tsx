@@ -242,12 +242,86 @@ export function ScanScreen({
   const [scans, setScans] = useState<ScanResult[]>([]);
   const [sessionScans, setSessionScans] = useState<ScanResult[]>([]);
   const [selectedScanIds, setSelectedScanIds] = useState<Set<string>>(new Set());
+  const [createdSalesOrder, setCreatedSalesOrder] = useState<{
+    salesOrderNumber: string;
+    items: ScanResult[];
+  } | null>(null);
 
-  const saveScansToStorage = async (updatedScans: ScanResult[]) => {
-    try {
-      await AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(updatedScans));
-    } catch (e) {
-      console.warn('Failed to save scans to local storage:', e);
+  const isLoadedRef = React.useRef<boolean>(false);
+
+  const saveScansToStorage = (updatedScans: ScanResult[]) => {
+    // Handled automatically by useEffect hook for high performance
+  };
+
+  const syncScansList = async (listToSync: ScanResult[], silent = true) => {
+    const pendingScansList = listToSync.filter((item) => item.status !== 'synced');
+    if (pendingScansList.length === 0) {
+      if (!silent) {
+        Alert.alert('Synced', 'All scans are already synchronized.');
+      }
+      return;
+    }
+
+    setIsSyncing(true);
+    let successCount = 0;
+    let lastError = '';
+
+    for (const scan of pendingScansList) {
+      try {
+        const response = await submitScan(scan.data, scan.type);
+        if (response.success) {
+          successCount++;
+          const serverId = response.data?.scanId;
+          setScans((prev) => {
+            const updated = prev.map((item) =>
+              item.id === scan.id
+                ? ({
+                  ...item,
+                  id: serverId || item.id,
+                  status: 'synced',
+                  classification: response.data?.classification,
+                  scannedDateFormatted: response.data?.scannedDateFormatted,
+                  extractedDate: response.data?.extractedDate,
+                  redirectUrl: response.data?.redirectUrl,
+                  details: response.data?.details,
+                } as ScanResult)
+                : item
+            );
+            saveScansToStorage(updated);
+            return updated;
+          });
+        } else {
+          lastError = response.error || 'Unknown server rejection';
+          setScans((prev) => {
+            const updated = prev.map((item) =>
+              item.id === scan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
+            );
+            saveScansToStorage(updated);
+            return updated;
+          });
+        }
+      } catch (e: any) {
+        lastError = e.message || 'Network error';
+        setScans((prev) => {
+          const updated = prev.map((item) =>
+            item.id === scan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
+          );
+          saveScansToStorage(updated);
+          return updated;
+        });
+      }
+    }
+
+    setIsSyncing(false);
+    if (!silent) {
+      if (successCount === 0 && lastError) {
+        Alert.alert(
+          'Sync Failed',
+          `Could not reach the database server:\n\n"${lastError}"\n\nTroubleshooting checklist:\n1. Ensure your phone is on the SAME Wi-Fi network as the PC.\n2. Ensure your PC's Wi-Fi network is NOT set to 'Public' profile.\n3. Make sure the backend server window is running on your PC.`
+        );
+      } else {
+        Alert.alert('Sync complete', `Successfully synchronized ${successCount} scan(s).`);
+      }
     }
   };
 
@@ -258,6 +332,9 @@ export function ScanScreen({
         if (stored) {
           const parsed = JSON.parse(stored);
           setScans(parsed);
+          
+          // Try syncing any pending local scans right away in the background
+          syncScansList(parsed, true);
           
           // 2. Fetch latest scans from server and merge them
           getScanHistory()
@@ -290,12 +367,17 @@ export function ScanScreen({
                     console.warn('Failed to save merged scans to AsyncStorage:', e);
                   });
 
+                  // Trigger silent background sync in case any local scans were merged back
+                  syncScansList(mergedList, true);
+
                   return mergedList;
                 });
               }
+              isLoadedRef.current = true;
             })
             .catch((err) => {
               console.warn('Failed to load scan history from server:', err);
+              isLoadedRef.current = true;
             });
         } else {
           // If no local scans exist, fetch from server directly
@@ -308,16 +390,27 @@ export function ScanScreen({
                   console.warn('Failed to save scans to AsyncStorage:', e);
                 });
               }
+              isLoadedRef.current = true;
             })
             .catch((err) => {
               console.warn('Failed to load scan history from server:', err);
+              isLoadedRef.current = true;
             });
         }
       })
       .catch((err) => {
         console.warn('Failed to load local scans from AsyncStorage:', err);
+        isLoadedRef.current = true;
       });
   }, []);
+
+  React.useEffect(() => {
+    if (isLoadedRef.current) {
+      AsyncStorage.setItem(LOCAL_SCANS_KEY, JSON.stringify(scans)).catch(e => {
+        console.warn('Failed to save scans to AsyncStorage:', e);
+      });
+    }
+  }, [scans]);
 
   const [lastScannedCode, setLastScannedCode] = useState<string>('');
   const [lastScannedTime, setLastScannedTime] = useState<number>(0);
@@ -502,6 +595,15 @@ export function ScanScreen({
     // Check if the barcode was already scanned (exists in historical list)
     const isDuplicate = scans.some((item) => item.data === data);
     if (isDuplicate) {
+      if (multiScanMode) {
+        // In multi-scan mode, silently skip duplicates (or show a non-blocking toast) to keep scanning fast and continuous!
+        setToastMessage(`Duplicate skipped: ${data}`);
+        setTimeout(() => {
+          setToastMessage('');
+        }, 1500);
+        return;
+      }
+
       isAlertShowingRef.current = true;
       
       // Pause camera feed in single mode to allow user to handle the popup
@@ -528,17 +630,9 @@ export function ScanScreen({
             style: 'default',
             onPress: () => {
               isAlertShowingRef.current = false;
-              
-              if (multiScanMode) {
-                sessionScannedCodesRef.current.add(data);
-                const count = sessionScannedCodesRef.current.size;
-                setSessionScanCount(count);
-                setToastMessage(`Scanned duplicate ${type}: ${data} (#${count} in batch)`);
-              } else {
-                setLastScannedCode(data);
-                setLastScannedTime(Date.now());
-                setToastMessage('');
-              }
+              setLastScannedCode(data);
+              setLastScannedTime(Date.now());
+              setToastMessage('');
 
               // Reset toast message after 2.2 seconds
               setTimeout(() => {
@@ -616,64 +710,8 @@ export function ScanScreen({
     setIsCameraActive(true);
   };
 
-  const handleSyncAll = async () => {
-    const pendingScansList = scans.filter((item) => item.status !== 'synced');
-    if (pendingScansList.length === 0) {
-      Alert.alert('Synced', 'All scans are already synchronized.');
-      return;
-    }
-
-    setIsSyncing(true);
-    let successCount = 0;
-    let lastError = '';
-    let updatedScans = [...scans];
-
-    for (const scan of pendingScansList) {
-      try {
-        const response = await submitScan(scan.data, scan.type);
-        if (response.success) {
-          successCount++;
-          const serverId = response.data?.scanId;
-          updatedScans = updatedScans.map((item) =>
-            item.id === scan.id
-              ? ({
-                ...item,
-                id: serverId || item.id,
-                status: 'synced',
-                classification: response.data?.classification,
-                scannedDateFormatted: response.data?.scannedDateFormatted,
-                extractedDate: response.data?.extractedDate,
-                redirectUrl: response.data?.redirectUrl,
-                details: response.data?.details,
-              } as ScanResult)
-              : item
-          );
-        } else {
-          lastError = response.error || 'Unknown server rejection';
-          updatedScans = updatedScans.map((item) =>
-            item.id === scan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
-          );
-        }
-      } catch (e: any) {
-        lastError = e.message || 'Network error';
-        updatedScans = updatedScans.map((item) =>
-          item.id === scan.id ? ({ ...item, status: 'failed' } as ScanResult) : item
-        );
-      }
-    }
-
-    setScans(updatedScans);
-    await saveScansToStorage(updatedScans);
-
-    setIsSyncing(false);
-    if (successCount === 0 && lastError) {
-      Alert.alert(
-        'Sync Failed',
-        `Could not reach the database server:\n\n"${lastError}"\n\nTroubleshooting checklist:\n1. Ensure your phone is on the SAME Wi-Fi network as the PC.\n2. Ensure your PC's Wi-Fi network is NOT set to 'Public' profile.\n3. Make sure the backend server window is running on your PC.`
-      );
-    } else {
-      Alert.alert('Sync complete', `Successfully synchronized ${successCount} scan(s).`);
-    }
+  const handleSyncAll = () => {
+    syncScansList(scans, false);
   };
 
   const clearHistory = () => {
@@ -694,6 +732,11 @@ export function ScanScreen({
   };
 
   const handleToggleSelectScan = (id: string) => {
+    const scan = scans.find(s => s.id === id);
+    if (scan && scan.salesOrder) {
+      return;
+    }
+
     setSelectedScanIds((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -711,12 +754,13 @@ export function ScanScreen({
       return;
     }
 
-    // Generate a 10-digit sales order number (first digit non-zero)
-    const firstDigit = Math.floor(Math.random() * 9) + 1; // 1-9
+    const firstDigit = 5;
     const restDigits = Math.floor(Math.random() * 1000000000).toString().padStart(9, '0');
     const salesOrderNumber = `${firstDigit}${restDigits}`;
 
     const selectedIdsArray = Array.from(selectedScanIds);
+    // Get items for success screen before we clear the IDs
+    const itemsForSuccess = scans.filter((s) => selectedScanIds.has(s.id));
 
     try {
       // 1. Submit to server
@@ -742,10 +786,11 @@ export function ScanScreen({
       // 3. Clear selected set
       setSelectedScanIds(new Set());
 
-      Alert.alert(
-        'Sales Order Created',
-        `Generated 10-digit Sales Order Number: ${salesOrderNumber}\nAssociated with ${selectedIdsArray.length} scan log(s).`
-      );
+      // Show success page
+      setCreatedSalesOrder({
+        salesOrderNumber,
+        items: itemsForSuccess,
+      });
     } catch (e: any) {
       Alert.alert(
         'Update Error',
@@ -768,6 +813,11 @@ export function ScanScreen({
               setScans(updatedScans);
               saveScansToStorage(updatedScans);
               setSelectedScanIds(new Set());
+
+              setCreatedSalesOrder({
+                salesOrderNumber,
+                items: itemsForSuccess,
+              });
             }
           }
         ]
@@ -858,157 +908,30 @@ export function ScanScreen({
             </View>
 
             <ScrollView contentContainerStyle={styles.modalScroll} showsVerticalScrollIndicator={false}>
-              {/* Main Data View */}
-              <View style={[styles.detailBlock, { backgroundColor: isDark ? '#131a26' : '#f8fafc', borderColor: colors.border }]}>
-                <Text style={[styles.detailBlockLabel, { color: colors.mutedText }]}>SCANNED CODE</Text>
-                <Text style={[styles.detailBlockData, { color: colors.text }]} selectable={true}>
-                  {selectedScanDetails.data}
-                </Text>
-              </View>
-
               {/* General Info Table */}
               <Text style={[styles.sectionTitle, { color: colors.text }]}>General Properties</Text>
               <View style={[styles.detailsTable, { borderColor: colors.border }]}>
                 <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                  <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Format</Text>
-                  <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.type}</Text>
+                  <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Number</Text>
+                  <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]} selectable={true}>
+                    {selectedScanDetails.data}
+                  </Text>
                 </View>
-                {selectedScanDetails.classification && (
-                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Classification</Text>
-                    <View style={[styles.classBadge, { backgroundColor: getClassificationStyles(selectedScanDetails.classification).bg }]}>
-                      <Text style={[styles.classBadgeText, { color: getClassificationStyles(selectedScanDetails.classification).text }]}>
-                        {selectedScanDetails.classification}
-                      </Text>
-                    </View>
-                  </View>
-                )}
                 <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                  <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Scanned Date</Text>
+                  <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Scanned Date & Time</Text>
                   <Text style={[styles.tableValue, { color: colors.text }]}>
                     {selectedScanDetails.scannedDateFormatted || new Date(selectedScanDetails.timestamp).toLocaleString()}
                   </Text>
                 </View>
-                {selectedScanDetails.extractedDate && (
-                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Embedded Date</Text>
-                    <Text style={[styles.tableValue, { color: '#10b981', fontWeight: '700' }]}>
-                      📅 {selectedScanDetails.extractedDate}
-                    </Text>
-                  </View>
-                )}
                 {selectedScanDetails.salesOrder && (
                   <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
                     <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Sales Order</Text>
-                    <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
+                    <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]} selectable={true}>
                       🛒 {selectedScanDetails.salesOrder}
                     </Text>
                   </View>
                 )}
-                {selectedScanDetails.details?.length !== undefined && (
-                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Character Count</Text>
-                    <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.length} chars</Text>
-                  </View>
-                )}
-                {selectedScanDetails.details?.characterSet && (
-                  <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                    <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Character Set</Text>
-                    <Text style={[styles.tableValue, { color: colors.text }]}>{selectedScanDetails.details.characterSet}</Text>
-                  </View>
-                )}
               </View>
-
-              {/* Rich Parsed Details */}
-              {selectedScanDetails.details && (
-                Object.keys(selectedScanDetails.details).some(k => !['length', 'characterSet'].includes(k))
-              ) && (
-                  <>
-                    <Text style={[styles.sectionTitle, { color: colors.text, marginTop: 20 }]}>Parsed Intelligence</Text>
-                    <View style={[styles.detailsTable, { borderColor: colors.border }]}>
-                      {selectedScanDetails.details.countryOfOrigin && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>GS1 Country of Origin</Text>
-                          <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
-                            {selectedScanDetails.details.countryOfOrigin}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.checkDigit !== undefined && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Check Digit</Text>
-                          <Text style={[styles.tableValue, { color: colors.text }]}>
-                            {selectedScanDetails.details.checkDigit}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.isCheckDigitValid !== undefined && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Checksum Verification</Text>
-                          <Text style={[styles.tableValue, { color: selectedScanDetails.details.isCheckDigitValid ? '#10b981' : '#f43f5e', fontWeight: '700' }]}>
-                            {selectedScanDetails.details.isCheckDigitValid ? '✓ Valid Checksum' : '✗ Invalid Checksum'}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.protocol && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Protocol</Text>
-                          <Text style={[styles.tableValue, { color: '#38bdf8', fontWeight: '700' }]}>
-                            {selectedScanDetails.details.protocol}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.host && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Host Domain</Text>
-                          <Text style={[styles.tableValue, { color: colors.text }]} numberOfLines={1}>
-                            {selectedScanDetails.details.host}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.path && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Path</Text>
-                          <Text style={[styles.tableValue, { color: colors.text }]} numberOfLines={1}>
-                            {selectedScanDetails.details.path}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.serialPrefix && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Prefix</Text>
-                          <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
-                            {selectedScanDetails.details.serialPrefix}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.serialBody && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Body</Text>
-                          <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
-                            {selectedScanDetails.details.serialBody}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.serialLetters && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Letters</Text>
-                          <Text style={[styles.tableValue, { color: '#ff682c', fontWeight: '700' }]}>
-                            {selectedScanDetails.details.serialLetters}
-                          </Text>
-                        </View>
-                      )}
-                      {selectedScanDetails.details.serialDigits && (
-                        <View style={[styles.tableRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' }]}>
-                          <Text style={[styles.tableLabel, { color: colors.mutedText }]}>Serial Digits</Text>
-                          <Text style={[styles.tableValue, { color: colors.text, fontWeight: '700' }]}>
-                            {selectedScanDetails.details.serialDigits}
-                          </Text>
-                        </View>
-                      )}
-                    </View>
-                  </>
-                )}
 
               {/* Live Serial API Details in Modal */}
               {selectedScanDetails.details?.serialApiData && (
@@ -1086,6 +1009,75 @@ export function ScanScreen({
     );
   };
 
+  const renderSalesOrderSuccessScreen = () => {
+    if (!createdSalesOrder) return null;
+
+    return (
+      <SafeAreaView style={[styles.successContainer, { backgroundColor: colors.bg }]}>
+        <StatusBar barStyle={isDark ? "light-content" : "dark-content"} backgroundColor={colors.bg} />
+
+        <ScrollView contentContainerStyle={styles.successScroll} showsVerticalScrollIndicator={false}>
+          {/* Tick Mark Container */}
+          <View style={styles.successIconOuter}>
+            <View style={styles.successIconInner}>
+              <Text style={styles.successCheckmark}>✓</Text>
+            </View>
+          </View>
+
+          <Text style={[styles.successTitle, { color: colors.text }]}>Sales Order Created</Text>
+          <Text style={[styles.successSubtitle, { color: colors.mutedText }]}>
+            Your sales order has been generated and synced successfully.
+          </Text>
+
+          {/* Sales Order Number Panel */}
+          <View style={[styles.successOrderBox, { backgroundColor: isDark ? '#131a26' : '#ffffff', borderColor: colors.border }]}>
+            <Text style={styles.successOrderLabel}>SALES ORDER NUMBER</Text>
+            <Text style={styles.successOrderVal}>🛒 {createdSalesOrder.salesOrderNumber}</Text>
+          </View>
+
+          {/* Included Items List */}
+          <Text style={[styles.successSectionTitle, { color: colors.text }]}>
+            Associated Scans ({createdSalesOrder.items.length})
+          </Text>
+
+          <View style={[styles.successTable, { borderColor: colors.border, backgroundColor: isDark ? '#131a26' : '#ffffff' }]}>
+            {createdSalesOrder.items.map((item, index) => (
+              <View
+                key={item.id}
+                style={[
+                  styles.successTableRow,
+                  { borderBottomColor: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)' },
+                  index === createdSalesOrder.items.length - 1 && { borderBottomWidth: 0 }
+                ]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.successItemData, { color: '#ff682c' }]} numberOfLines={1}>
+                    {item.details?.serialApiData?.product || 'Unknown Product'}
+                  </Text>
+                  <Text style={[styles.successItemType, { color: colors.text, marginTop: 4 }]} numberOfLines={1}>
+                    {item.data}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+
+          {/* Action Button */}
+          <TouchableOpacity
+            style={styles.successDoneBtn}
+            onPress={() => setCreatedSalesOrder(null)}
+          >
+            <Text style={styles.successDoneBtnText}>Done</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      </SafeAreaView>
+    );
+  };
+
+  if (createdSalesOrder) {
+    return renderSalesOrderSuccessScreen();
+  }
+
   // ----------------------------------------------------
   // FULL SCREEN LOGS VIEW (If showLogs === true)
   // ----------------------------------------------------
@@ -1105,17 +1097,7 @@ export function ScanScreen({
           <Text style={[styles.headerTitle, { color: colors.text }]}>Scan Logs</Text>
 
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            {(pendingScans > 0 || failedScans > 0) && (
-              <TouchableOpacity
-                onPress={handleSyncAll}
-                disabled={isSyncing}
-                style={[styles.clearBtn, { marginRight: 12 }]}
-              >
-                <Text style={[styles.clearBtnText, { color: '#ff682c' }]}>
-                  {isSyncing ? 'Syncing...' : 'Sync All'}
-                </Text>
-              </TouchableOpacity>
-            )}
+            {/* Sync All button removed for automatic sync */}
             {scans.length > 0 && (
               <TouchableOpacity onPress={clearHistory} style={[styles.clearBtn, { marginRight: 12 }]}>
                 <Text style={styles.clearBtnText}>Clear All</Text>
@@ -1265,7 +1247,7 @@ export function ScanScreen({
         {/* Active Mode Indicator Badge (Overlay on the viewport) */}
         <View style={[styles.cameraModeIndicator, { backgroundColor: isDark ? 'rgba(15, 23, 42, 0.85)' : 'rgba(255, 255, 255, 0.95)' }]}>
           <Text style={[styles.cameraModeIndicatorText, { color: '#ff682c' }]}>
-            {multiScanMode ? '● MULTI MODE ACTIVE' : '● SINGLE MODE ACTIVE'}
+            {multiScanMode ? '● MULTI' : '● SINGLE'}
           </Text>
         </View>
 
@@ -1621,20 +1603,7 @@ export function ScanScreen({
             </TouchableOpacity>
           </View>
 
-          {(pendingScans > 0 || failedScans > 0) && (
-            <TouchableOpacity
-              style={[styles.miniSyncBtn, isSyncing && styles.miniSyncBtnDisabled]}
-              onPress={handleSyncAll}
-              disabled={isSyncing}
-            >
-              {isSyncing ? (
-                <ActivityIndicator color="#ffffff" size="small" style={{ marginRight: 4, transform: [{ scale: 0.7 }] }} />
-              ) : null}
-              <Text style={styles.miniSyncText}>
-                {isSyncing ? 'Syncing...' : `🔄 Sync (${pendingScans + failedScans})`}
-              </Text>
-            </TouchableOpacity>
-          )}
+          {/* Floating sync button removed for automatic sync */}
         </View>
       </View>
 
@@ -2173,10 +2142,10 @@ const styles = StyleSheet.create({
   cameraModeIndicator: {
     position: 'absolute',
     top: 16,
-    alignSelf: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    borderRadius: 20,
+    left: 16,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(255, 104, 44, 0.3)',
     zIndex: 20,
@@ -2187,9 +2156,9 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   cameraModeIndicatorText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '800',
-    letterSpacing: 1,
+    letterSpacing: 0.5,
   },
   batchCardContainer: {
     width: '90%',
@@ -2290,5 +2259,129 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
     letterSpacing: 0.2,
+  },
+  successContainer: {
+    flex: 1,
+  },
+  successScroll: {
+    paddingHorizontal: 24,
+    paddingVertical: 40,
+    alignItems: 'center',
+  },
+  successIconOuter: {
+    width: 90,
+    height: 90,
+    borderRadius: 45,
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  successIconInner: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    backgroundColor: '#10b981',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#10b981',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  successCheckmark: {
+    color: '#ffffff',
+    fontSize: 36,
+    fontWeight: 'bold',
+  },
+  successTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 8,
+    letterSpacing: 0.3,
+  },
+  successSubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 32,
+    paddingHorizontal: 16,
+    lineHeight: 20,
+  },
+  successOrderBox: {
+    width: '100%',
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 1,
+    alignItems: 'center',
+    marginBottom: 32,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  successOrderLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#ff682c',
+    letterSpacing: 1,
+    marginBottom: 8,
+  },
+  successOrderVal: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#ff682c',
+  },
+  successSectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    alignSelf: 'flex-start',
+    marginBottom: 12,
+    letterSpacing: 0.2,
+  },
+  successTable: {
+    width: '100%',
+    borderRadius: 12,
+    borderWidth: 1,
+    overflow: 'hidden',
+    marginBottom: 40,
+  },
+  successTableRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderBottomWidth: 1,
+  },
+  successItemData: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  successItemType: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  successItemProduct: {
+    fontSize: 11,
+    marginLeft: 6,
+    fontWeight: '600',
+  },
+  successDoneBtn: {
+    backgroundColor: '#ff682c',
+    paddingVertical: 14,
+    width: '100%',
+    borderRadius: 12,
+    alignItems: 'center',
+    shadowColor: '#ff682c',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  successDoneBtnText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: '700',
   },
 });

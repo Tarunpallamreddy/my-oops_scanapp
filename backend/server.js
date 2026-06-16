@@ -133,6 +133,8 @@ function getMockSerialDetails(serialNumber) {
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
+let lastOAuthAttemptTime = 0;
+const OAUTH_RETRY_COOLDOWN = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Retrieves an OAuth 2.0 access token using credentials.
@@ -142,6 +144,11 @@ let tokenExpiresAt = 0;
 async function getOAuthToken() {
   if (cachedToken && Date.now() < tokenExpiresAt - 10000) {
     return cachedToken;
+  }
+
+  // If we recently failed to get an OAuth token, don't try again immediately to avoid slowing down requests
+  if (Date.now() - lastOAuthAttemptTime < OAUTH_RETRY_COOLDOWN) {
+    return null;
   }
 
   const user = 'CR5ORCA3OPT';
@@ -236,6 +243,7 @@ async function getOAuthToken() {
   }
 
   console.warn('[OAuth] All OAuth 2.0 token attempts failed. Falling back to Basic Authentication.');
+  lastOAuthAttemptTime = Date.now(); // Record failure time to trigger cooldown
   return null;
 }
 
