@@ -249,11 +249,7 @@ module.exports = {
         .input('salesOrder', sql.VarChar(50), scan.salesOrder || null)
         .query(insertQuery);
 
-      console.log(`[Database] Scanned item saved to SQL Server: ${scan.data}`);
-
-      // Auto-seed mock order details
-      const productName = scan.details?.serialApiData?.product || 'Enterprise Device Frame V2';
-      await seedOrderInsights(dbPool, scan.data, productName);
+      console.log(`[Database] Scanned item saved to SQL Server with order insights: ${scan.data}`);
 
       return scan;
     } catch (err) {
@@ -378,6 +374,48 @@ module.exports = {
     } catch (err) {
       console.error('[Database] Failed to get serial number by order:', err.message);
       return null;
+    }
+  },
+
+  // Delete a single scan asynchronously
+  async deleteSingle(id) {
+    try {
+      const dbPool = await getPool();
+      
+      const scanResult = await dbPool.request()
+        .input('id', sql.VarChar(50), id)
+        .query('SELECT data FROM Scans WHERE id = @id');
+        
+      if (scanResult.recordset.length > 0) {
+        const serial = scanResult.recordset[0].data;
+        const otherScans = await dbPool.request()
+          .input('serial', sql.VarChar(50), serial)
+          .input('id', sql.VarChar(50), id)
+          .query('SELECT 1 FROM Scans WHERE data = @serial AND id != @id');
+          
+        if (otherScans.recordset.length === 0) {
+          const orders = await dbPool.request()
+            .input('serial', sql.VarChar(50), serial)
+            .query('SELECT orderNumber FROM Orders WHERE serialNumber = @serial');
+            
+          for (const orderRow of orders.recordset) {
+            const orderNum = orderRow.orderNumber;
+            await dbPool.request().input('orderNum', sql.VarChar(50), orderNum).query('DELETE FROM Billing WHERE orderNumber = @orderNum');
+            await dbPool.request().input('orderNum', sql.VarChar(50), orderNum).query('DELETE FROM Deliveries WHERE orderNumber = @orderNum');
+          }
+          await dbPool.request().input('serial', sql.VarChar(50), serial).query('DELETE FROM Orders WHERE serialNumber = @serial');
+        }
+      }
+
+      await dbPool.request()
+        .input('id', sql.VarChar(50), id)
+        .query('DELETE FROM Scans WHERE id = @id');
+        
+      console.log(`[Database] Deleted single scan from SQL Server: ${id}`);
+      return true;
+    } catch (err) {
+      console.error(`[Database] Delete single failed in SQL Server for id ${id}:`, err.message);
+      return false;
     }
   }
 };

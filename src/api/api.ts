@@ -47,6 +47,17 @@ export async function clearScanHistory(): Promise<ApiResponse<{ success: boolean
 }
 
 /**
+ * Deletes a single scan log from the server database.
+ * @param scanId The ID of the scan to delete.
+ * @returns Promise with ApiResponse containing status.
+ */
+export async function deleteScan(scanId: string): Promise<ApiResponse<{ success: boolean }>> {
+  return apiClient<{ success: boolean }>(`/scans/${scanId}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
  * Updates scans with a generated 10-digit Sales Order number.
  * @param scanIds Array of scan IDs to update.
  * @param salesOrder The 10-digit Sales Order number to associate.

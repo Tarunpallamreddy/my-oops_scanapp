@@ -9,6 +9,7 @@ interface ScanHistoryCardProps {
   onPressLink?: () => void;
   selected?: boolean;
   onToggleSelect?: () => void;
+  onDelete?: () => void;
 }
 
 export function ScanHistoryCard({
@@ -18,6 +19,7 @@ export function ScanHistoryCard({
   onPressLink,
   selected = false,
   onToggleSelect,
+  onDelete,
 }: ScanHistoryCardProps) {
   const isDark = theme === 'dark';
 
@@ -107,11 +109,8 @@ export function ScanHistoryCard({
       <View style={styles.cardInfo}>
         <View style={styles.cardHeaderRow}>
           <View style={styles.typeTagRow}>
-            <Text style={[styles.cardType, { color: isDark ? '#ffa07a' : '#ff682c' }]}>
-              {item.type}
-            </Text>
             {!!item.classification && (
-              <View style={[styles.classBadge, { backgroundColor: classStyles.bg }]}>
+              <View style={[styles.classBadge, { backgroundColor: classStyles.bg, marginLeft: 0 }]}>
                 <Text style={[styles.classBadgeText, { color: classStyles.text }]}>
                   {item.classification}
                 </Text>
@@ -179,7 +178,27 @@ export function ScanHistoryCard({
         )}
       </View>
 
-      <Text style={{ color: '#ff682c', fontSize: 12, fontWeight: '700' }}>📄 Details →</Text>
+      <View style={styles.rightActionsRow}>
+        {onDelete && (
+          <TouchableOpacity
+            activeOpacity={0.6}
+            style={[
+              styles.deleteButton,
+              {
+                backgroundColor: isDark ? 'rgba(244, 63, 94, 0.12)' : 'rgba(244, 63, 94, 0.08)',
+                borderColor: isDark ? 'rgba(244, 63, 94, 0.2)' : 'rgba(244, 63, 94, 0.15)',
+              }
+            ]}
+            onPress={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+          >
+            <Text style={styles.deleteButtonText}>🗑️</Text>
+          </TouchableOpacity>
+        )}
+        <Text style={{ color: '#ff682c', fontSize: 12, fontWeight: '700', marginLeft: 8 }}>📄 Details →</Text>
+      </View>
     </TouchableOpacity>
   );
 }
@@ -348,6 +367,20 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 0.2,
+  },
+  rightActionsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  deleteButton: {
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  deleteButtonText: {
+    fontSize: 13,
   },
 });
 

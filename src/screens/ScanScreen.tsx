@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ScannerOverlay } from './ScannerOverlay';
 import { ScanHistoryCard } from './ScanHistoryCard';
 import { ScanResult } from '../types';
-import { submitScan, getScanHistory, clearScanHistory, updateSalesOrder } from '../api/api';
+import { submitScan, getScanHistory, clearScanHistory, updateSalesOrder, deleteScan } from '../api/api';
 
 const LOCAL_SCANS_KEY = '@mygoscan:scans';
 
@@ -580,7 +580,8 @@ export function ScanScreen({
     }
 
     if (multiScanMode) {
-      // Prevent duplicates in the current active camera session.
+      // Prevent rapid duplicate scan of the exact same code in the *current* active camera frame session
+      // (This avoids triggering the duplicate alert pop-up repeatedly on every frame)
       if (sessionScannedCodesRef.current.has(data)) {
         return;
       }
@@ -597,20 +598,6 @@ export function ScanScreen({
     // Check if the barcode was already scanned (exists in historical list)
     const isDuplicate = scans.some((item) => item.data === data);
     if (isDuplicate) {
-      if (multiScanMode) {
-        // In multi-scan mode, allow duplicate scan of historically scanned items in the session batch.
-        // We only prevent duplicates scanned in the *current* active camera session feed.
-        sessionScannedCodesRef.current.add(data);
-        const count = sessionScannedCodesRef.current.size;
-        setSessionScanCount(count);
-        setToastMessage(`Scanned ${type}: ${data}`);
-        setTimeout(() => {
-          setToastMessage('');
-        }, 2200);
-        saveAndSubmitScan(data, type);
-        return;
-      }
-
       isAlertShowingRef.current = true;
       
       // Pause camera feed in single mode to allow user to handle the popup
@@ -627,7 +614,7 @@ export function ScanScreen({
             style: 'cancel',
             onPress: () => {
               isAlertShowingRef.current = false;
-              // Reset the duplicate tracker refs so the camera can scan new codes
+              // Reset duplicate tracker refs so camera can scan again
               lastScannedCodeRef.current = '';
               lastScannedTimeRef.current = 0;
             }
@@ -637,9 +624,17 @@ export function ScanScreen({
             style: 'default',
             onPress: () => {
               isAlertShowingRef.current = false;
-              setLastScannedCode(data);
-              setLastScannedTime(Date.now());
-              setToastMessage('');
+              
+              if (multiScanMode) {
+                sessionScannedCodesRef.current.add(data);
+                const count = sessionScannedCodesRef.current.size;
+                setSessionScanCount(count);
+                setToastMessage(`Scanned ${type}: ${data} (#${count} in batch)`);
+              } else {
+                setLastScannedCode(data);
+                setLastScannedTime(Date.now());
+                setToastMessage('');
+              }
 
               // Reset toast message after 2.2 seconds
               setTimeout(() => {
@@ -707,6 +702,64 @@ export function ScanScreen({
     setLastScannedTime(0);
     setSessionScanCount(0);
     setIsCameraActive(true);
+  };
+
+  const clearHistory = () => {
+    Alert.alert('Clear History', 'Are you sure you want to clear all scans?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Clear All',
+        style: 'destructive',
+        onPress: () => {
+          setScans([]);
+          setSessionScans([]);
+          sessionScannedCodesRef.current.clear();
+          setSessionScanCount(0);
+          AsyncStorage.removeItem(LOCAL_SCANS_KEY).catch((err) => {
+            console.warn('Failed to clear AsyncStorage scans:', err);
+          });
+          clearScanHistory().catch((err) => {
+            console.warn('Failed to clear database logs:', err);
+          });
+        },
+      },
+    ]);
+  };
+
+  const handleDeleteScan = (id: string) => {
+    Alert.alert('Delete Scan Log', 'Are you sure you want to delete this scan?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () => {
+          const scan = scans.find((s) => s.id === id);
+          
+          setScans((prev) => {
+            const updated = prev.filter((item) => item.id !== id);
+            saveScansToStorage(updated);
+            return updated;
+          });
+          setSessionScans((prev) => prev.filter((item) => item.id !== id));
+          
+          if (scan) {
+            sessionScannedCodesRef.current.delete(scan.data);
+            const count = sessionScannedCodesRef.current.size;
+            setSessionScanCount(count);
+          }
+
+          setSelectedScanIds((prev) => {
+            const next = new Set(prev);
+            next.delete(id);
+            return next;
+          });
+
+          deleteScan(id).catch((err) => {
+            console.warn('Failed to delete scan from backend:', err);
+          });
+        },
+      },
+    ]);
   };
 
   const handleSyncAll = () => {
@@ -971,6 +1024,8 @@ export function ScanScreen({
                 )
               )}
 
+
+
               {/* Actions Panel inside Modal */}
               <View style={styles.modalActionContainer}>
                 {selectedScanDetails.classification === 'OCR Serial Number' ? (
@@ -1100,6 +1155,12 @@ export function ScanScreen({
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {/* Sync All button removed for automatic sync */}
             <TouchableOpacity
+              onPress={clearHistory}
+              style={[styles.clearBtn, { marginRight: 12 }]}
+            >
+              <Text style={styles.clearBtnText}>Clear All</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
               style={[styles.backButton, { marginRight: 0 }, !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => {
                 setSearchQuery('');
@@ -1144,6 +1205,7 @@ export function ScanScreen({
                 theme={theme}
                 selected={selectedScanIds.has(item.id)}
                 onToggleSelect={() => handleToggleSelectScan(item.id)}
+                onDelete={() => handleDeleteScan(item.id)}
                 onPress={() => setSelectedScanDetails(item)}
                 onPressLink={() => {
                   if (item.redirectUrl) {
@@ -1211,7 +1273,7 @@ export function ScanScreen({
             ]}
             onPress={onOpenDrawer}
           >
-            <Text style={[styles.headerButtonText, !isDark && { color: '#0f172a' }]}>☰</Text>
+            <Text style={[styles.headerButtonText, !isDark && { color: '#0f172a' }, { fontSize: 16 }]}>☰</Text>
           </TouchableOpacity>
           <Text style={[styles.headerTitle, { color: colors.text }]}>My Scan Hub</Text>
         </View>
@@ -1248,29 +1310,30 @@ export function ScanScreen({
         </View>
 
         {isCameraActive ? (
-          <CameraView
-            style={StyleSheet.absoluteFill}
-            facing="back"
-            enableTorch={flash}
-            barcodeScannerSettings={{
-              barcodeTypes: [
-                'qr',
-                'code128',
-                'ean13',
-                'ean8',
-                'upc_a',
-                'upc_e',
-                'code39',
-                'code93',
-                'pdf417',
-                'itf14',
-                'codabar',
-                'aztec',
-                'datamatrix',
-              ],
-            }}
-            onBarcodeScanned={handleBarcodeScanned}
-          >
+          <>
+            <CameraView
+              style={StyleSheet.absoluteFill}
+              facing="back"
+              enableTorch={flash}
+              barcodeScannerSettings={{
+                barcodeTypes: [
+                  'qr',
+                  'code128',
+                  'ean13',
+                  'ean8',
+                  'upc_a',
+                  'upc_e',
+                  'code39',
+                  'code93',
+                  'pdf417',
+                  'itf14',
+                  'codabar',
+                  'aztec',
+                  'datamatrix',
+                ],
+              }}
+              onBarcodeScanned={handleBarcodeScanned}
+            />
             <ScannerOverlay
               flash={flash}
               onToggleFlash={() => setFlash(!flash)}
@@ -1303,7 +1366,7 @@ export function ScanScreen({
                 <Text style={styles.toastText}>✓ {toastMessage}</Text>
               </View>
             )}
-          </CameraView>
+          </>
         ) : (
           <View style={[styles.cameraBackground, { backgroundColor: isDark ? '#0b0f19' : '#f1f5f9' }]}>
             {singleScanResult ? (
@@ -1448,6 +1511,8 @@ export function ScanScreen({
                             </View>
                           </View>
                         )}
+
+
                       </View>
                     )}
                 </View>
@@ -1491,7 +1556,7 @@ export function ScanScreen({
                     }}
                   >
                     <Text style={[styles.openLinkBtnText, { color: isDark ? '#ffffff' : '#0f172a' }]}>
-                      🤖 Ask Sales Order AI Assistant
+                      🤖 Ask Serial Search AI Assistant
                     </Text>
                   </TouchableOpacity>
                 )}

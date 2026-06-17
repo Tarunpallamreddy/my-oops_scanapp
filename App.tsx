@@ -1,14 +1,13 @@
 import React, { useState, useRef } from 'react';
 import {
-  Animated,
   View,
-  Text,
-  TouchableOpacity,
   StyleSheet,
+  Animated,
+  TouchableOpacity,
+  Text,
   Platform,
 } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { LoginScreen } from './src/screens/LoginScreen';
 import { ScanScreen } from './src/screens/ScanScreen';
 import { Settings } from './src/screens/Settings';
 import { ChatScreen } from './src/screens/ChatScreen';
@@ -162,21 +161,21 @@ export default function App() {
               <Text style={[styles.menuItemText, { color: colors.text }]}>Scan Hub</Text>
             </TouchableOpacity>
 
-            {/* Sales Order Inquiry Option */}
+            {/* Serial Search AI Assistant Option */}
             <TouchableOpacity
               style={[
                 styles.menuItem,
                 currentScreen === 'Chat' && { backgroundColor: colors.activeBg },
               ]}
               onPress={() => {
-                // Open Chat with empty context for general sales order inquiry
+                // Open Chat with empty context for general inquiry
                 setActiveSerialContext({ serialNumber: '', productName: '' });
                 setCurrentScreen('Chat');
                 toggleDrawer(false);
               }}
             >
               <Text style={{ fontSize: 18 }}>🤖</Text>
-              <Text style={[styles.menuItemText, { color: colors.text }]}>Sales Order Inquiry</Text>
+              <Text style={[styles.menuItemText, { color: colors.text }]}>Serial Search AI Assistant</Text>
             </TouchableOpacity>
 
             {/* Profile Option */}
@@ -198,6 +197,7 @@ export default function App() {
           {/* Footer User Profile Card */}
           <View style={[styles.footer, { borderTopColor: colors.border }]}>
             <Text style={[styles.profileName, { color: colors.text }]}>{profileName}</Text>
+            <Text style={[styles.profileEmail, { color: colors.mutedText }]}>{profileEmail}</Text>
           </View>
         </Animated.View>
       </View>

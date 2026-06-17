@@ -85,7 +85,7 @@ function parseAndRenderMessage(text: string, colors: any, isDark: boolean) {
         currentTableLines = [];
         inTable = false;
       }
-      
+
       if (line) {
         if (line.startsWith('###')) {
           elements.push(
@@ -192,10 +192,8 @@ export function ChatScreen({
 
   // Add greeting when chat context updates
   useEffect(() => {
-    const greetingText = activeSerial
-      ? `Hello! I am your **Sales Order AI Intelligence AI Assistant**.\n\nI have loaded the context for Serial Number **${activeSerial}** (${activeProduct || 'Unknown Product'}).\n\nHow can I help you today? You can check order fulfillment details, shipping tracking logs, or invoice records.`
-      : `Hello! I am your **Sales Order AI Intelligence AI Assistant**.\n\nI don't have an active scanned serial context. Please type a serial or sales order number (e.g. \`ORD-5100511\`) to fetch its order fulfillment, tracking logs, or billing records.`;
-    
+    const greetingText = `Hello! I am your **Serial Search AI Assistant**.`;
+
     setMessages([
       {
         id: 'greet',
@@ -291,8 +289,8 @@ export function ChatScreen({
           </TouchableOpacity>
 
           <View>
-            <Text style={[styles.headerTitle, { color: colors.text }]}>Sales Order AI Assistance</Text>
-            <Text style={[styles.headerSubtitle, { color: colors.mutedText }]}>AI Sales Intelligence</Text>
+            <Text style={[styles.headerTitle, { color: colors.text }]}>Serial Search AI Assistant</Text>
+            <Text style={[styles.headerSubtitle, { color: colors.mutedText }]}>AI Serial Intelligence</Text>
           </View>
         </View>
 
@@ -319,7 +317,7 @@ export function ChatScreen({
               Active Context: {activeSerial || 'None'}
             </Text>
             <Text style={[styles.contextSub, { color: colors.mutedText }]} numberOfLines={1}>
-              {activeSerial ? (activeProduct || 'Unknown Product') : 'Enter Serial # or Sales Order # to query'}
+              {activeSerial ? (activeProduct || 'Unknown Product') : 'Enter Serial # to query'}
             </Text>
           </View>
         </View>
@@ -383,7 +381,7 @@ export function ChatScreen({
                 <View style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 4 }}>
                   <ActivityIndicator size="small" color="#ff682c" style={{ marginRight: 8 }} />
                   <Text style={[styles.chatText, { color: colors.mutedText, fontStyle: 'italic' }]}>
-                    EyeScan is searching database...
+                    Assistant is searching SAP database...
                   </Text>
                 </View>
               </View>
@@ -395,7 +393,7 @@ export function ChatScreen({
         <View style={[styles.inputBar, { backgroundColor: colors.headerBg, borderTopColor: colors.border }]}>
           <TextInput
             style={[styles.textInput, { backgroundColor: colors.inputBg, color: colors.inputColor }]}
-            placeholder="Ask order status, delivery, billing..."
+            placeholder="Ask registration details, status, product..."
             placeholderTextColor={isDark ? '#475569' : '#94a3b8'}
             value={inputText}
             onChangeText={setInputText}
