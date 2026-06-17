@@ -1,4 +1,8 @@
+// Load environment variables from .env file
+require('dotenv').config();
+
 module.exports = {
+  geminiApiKey: process.env.GEMINI_API_KEY || '',
   // Database configuration parameters
   // Ensure SQL Server Authentication (Mixed Mode) is enabled on your SQL Server!
   dbConfig: {

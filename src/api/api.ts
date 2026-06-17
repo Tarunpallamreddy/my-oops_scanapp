@@ -64,3 +64,23 @@ export async function updateSalesOrder(
     }),
   });
 }
+
+/**
+ * Sends a chat request to the Sales Intelligence backend orchestrator.
+ * @param serialNumber The serial number context of the conversation.
+ * @param message The user query string.
+ * @returns Promise with ApiResponse containing chat category and response text.
+ */
+export async function sendChatMessage(
+  serialNumber: string,
+  message: string
+): Promise<ApiResponse<{ success: boolean; category: string; responseText: string; serialNumber?: string | null; productName?: string | null }>> {
+  return apiClient<{ success: boolean; category: string; responseText: string; serialNumber?: string | null; productName?: string | null }>('/chat', {
+    method: 'POST',
+    body: JSON.stringify({
+      serialNumber,
+      message,
+    }),
+  });
+}
+

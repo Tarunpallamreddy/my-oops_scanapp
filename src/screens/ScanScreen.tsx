@@ -211,14 +211,16 @@ interface ScanScreenProps {
   profileName: string;
   profileEmail: string;
   theme: 'dark' | 'light';
-  onOpenSettings: () => void;
+  onOpenChat: (serialNumber: string, productName: string) => void;
+  onOpenDrawer: () => void;
 }
 
 export function ScanScreen({
   profileName,
   profileEmail,
   theme,
-  onOpenSettings,
+  onOpenChat,
+  onOpenDrawer,
 }: ScanScreenProps) {
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -426,7 +428,7 @@ export function ScanScreen({
   const isDark = theme === 'dark';
   const colors = {
     bg: isDark ? '#090d16' : '#f8fafc',
-    headerBg: isDark ? '#090d16' : '#ffffff',
+    headerBg: isDark ? '#090d16' : '#f8fafc', // Seamless background matching the screen color
     cardBg: isDark ? '#131a26' : '#ffffff',
     text: isDark ? '#f8fafc' : '#0f172a',
     mutedText: isDark ? '#475569' : '#64748b',
@@ -596,11 +598,16 @@ export function ScanScreen({
     const isDuplicate = scans.some((item) => item.data === data);
     if (isDuplicate) {
       if (multiScanMode) {
-        // In multi-scan mode, silently skip duplicates (or show a non-blocking toast) to keep scanning fast and continuous!
-        setToastMessage(`Duplicate skipped: ${data}`);
+        // In multi-scan mode, allow duplicate scan of historically scanned items in the session batch.
+        // We only prevent duplicates scanned in the *current* active camera session feed.
+        sessionScannedCodesRef.current.add(data);
+        const count = sessionScannedCodesRef.current.size;
+        setSessionScanCount(count);
+        setToastMessage(`Scanned ${type}: ${data}`);
         setTimeout(() => {
           setToastMessage('');
-        }, 1500);
+        }, 2200);
+        saveAndSubmitScan(data, type);
         return;
       }
 
@@ -676,14 +683,6 @@ export function ScanScreen({
       lastScannedTimeRef.current = 0;
       setLastScannedCode('');
       setLastScannedTime(0);
-
-      if (multiScanMode && sessionScans.length > 0) {
-        const count = sessionScans.length;
-        Alert.alert(
-          'Scan Complete',
-          `${count} barcode${count === 1 ? ' has' : 's have'} been scanned.`
-        );
-      }
       return;
     }
 
@@ -712,23 +711,6 @@ export function ScanScreen({
 
   const handleSyncAll = () => {
     syncScansList(scans, false);
-  };
-
-  const clearHistory = () => {
-    Alert.alert('Clear History', 'Are you sure you want to clear all scans?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Clear All',
-        style: 'destructive',
-        onPress: () => {
-          setScans([]);
-          saveScansToStorage([]);
-          clearScanHistory().catch((err) => {
-            console.warn('Failed to clear database logs:', err);
-          });
-        }
-      },
-    ]);
   };
 
   const handleToggleSelectScan = (id: string) => {
@@ -933,6 +915,25 @@ export function ScanScreen({
                 )}
               </View>
 
+              {/* AI Scan Insights in Modal */}
+              {selectedScanDetails.details?.geminiAnalysis && (
+                <>
+                  <Text style={[styles.sectionTitle, { color: '#ff682c', marginTop: 20 }]}>✨ AI Scan Insights</Text>
+                  <View style={[
+                    styles.detailsTable,
+                    {
+                      borderColor: colors.border,
+                      padding: 14,
+                      backgroundColor: isDark ? 'rgba(255, 104, 44, 0.05)' : 'rgba(255, 104, 44, 0.03)'
+                    }
+                  ]}>
+                    <Text style={{ color: colors.text, fontSize: 13, lineHeight: 18, fontStyle: 'italic' }}>
+                      "{selectedScanDetails.details.geminiAnalysis}"
+                    </Text>
+                  </View>
+                </>
+              )}
+
               {/* Live Serial API Details in Modal */}
               {selectedScanDetails.details?.serialApiData && (
                 selectedScanDetails.details.serialApiData.notFound ? (
@@ -1098,11 +1099,6 @@ export function ScanScreen({
 
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             {/* Sync All button removed for automatic sync */}
-            {scans.length > 0 && (
-              <TouchableOpacity onPress={clearHistory} style={[styles.clearBtn, { marginRight: 12 }]}>
-                <Text style={styles.clearBtnText}>Clear All</Text>
-              </TouchableOpacity>
-            )}
             <TouchableOpacity
               style={[styles.backButton, { marginRight: 0 }, !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' }]}
               onPress={() => {
@@ -1110,7 +1106,7 @@ export function ScanScreen({
                 setShowLogs(false);
               }}
             >
-              <Text style={[styles.backButtonText, { color: colors.text }]}>Back →</Text>
+              <Text style={[styles.backButtonText, { color: colors.text }]}>← Back</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1206,18 +1202,18 @@ export function ScanScreen({
 
       {/* Top Header */}
       <View style={[styles.header, { backgroundColor: colors.headerBg, borderColor: colors.border }]}>
-        <Text style={[styles.headerTitle, { color: colors.text }]}>MyGo Scan</Text>
-        <View style={styles.headerActionRow}>
-          {/* Settings Symbol Trigger */}
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <TouchableOpacity
             style={[
               styles.headerButton,
+              { marginRight: 12 },
               !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' },
             ]}
-            onPress={onOpenSettings}
+            onPress={onOpenDrawer}
           >
-            <Text style={[styles.headerButtonText, !isDark && { color: '#0f172a' }]}>⚙️</Text>
+            <Text style={[styles.headerButtonText, !isDark && { color: '#0f172a' }]}>☰</Text>
           </TouchableOpacity>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>My Scan Hub</Text>
         </View>
       </View>
 
@@ -1279,6 +1275,27 @@ export function ScanScreen({
               flash={flash}
               onToggleFlash={() => setFlash(!flash)}
             />
+
+            {/* Scanned Items HUD Overlay for Multi Scan Mode */}
+            {multiScanMode && sessionScans.length > 0 && (
+              <View style={styles.cameraScannedHud}>
+                <View style={styles.hudHeader}>
+                  <Text style={styles.hudCountText}>Scanned Batch: {sessionScans.length} item(s)</Text>
+                </View>
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.hudScrollContent}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  {sessionScans.map((item) => (
+                    <View key={item.id} style={styles.hudItemBadge}>
+                      <Text style={styles.hudItemText} numberOfLines={1}>{item.data}</Text>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
 
             {/* Notification Toast */}
             {!!toastMessage && (
@@ -1413,6 +1430,24 @@ export function ScanScreen({
                             </View>
                           )
                         )}
+
+                        {/* AI Scan Insights */}
+                        {singleScanResult.details?.geminiAnalysis && (
+                          <View style={{ marginTop: 12, borderTopWidth: 1, borderColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)', paddingTop: 8 }}>
+                            <Text style={[styles.resultIntelTitle, { color: '#ff682c', marginBottom: 6 }]}>✨ AI SCAN INSIGHTS</Text>
+                            <View style={{
+                              backgroundColor: isDark ? 'rgba(255, 104, 44, 0.05)' : 'rgba(255, 104, 44, 0.03)',
+                              padding: 10,
+                              borderRadius: 10,
+                              borderWidth: 1,
+                              borderColor: isDark ? 'rgba(255, 104, 44, 0.15)' : 'rgba(255, 104, 44, 0.1)'
+                            }}>
+                              <Text style={{ color: colors.text, fontSize: 12, lineHeight: 16, fontStyle: 'italic' }}>
+                                "{singleScanResult.details.geminiAnalysis}"
+                              </Text>
+                            </View>
+                          </View>
+                        )}
                       </View>
                     )}
                 </View>
@@ -1448,6 +1483,19 @@ export function ScanScreen({
                   )
                 )}
 
+                {singleScanResult.classification === 'OCR Serial Number' && (
+                  <TouchableOpacity
+                    style={[styles.openLinkBtn, { marginTop: 10, backgroundColor: isDark ? '#1e293b' : '#cbd5e1', shadowColor: 'transparent' }]}
+                    onPress={() => {
+                      onOpenChat(singleScanResult.data, singleScanResult.details?.serialApiData?.product || 'Enterprise Device Frame V2');
+                    }}
+                  >
+                    <Text style={[styles.openLinkBtnText, { color: isDark ? '#ffffff' : '#0f172a' }]}>
+                      🤖 Ask Sales Order AI Assistant
+                    </Text>
+                  </TouchableOpacity>
+                )}
+
                 <TouchableOpacity
                   style={styles.scanAgainBtn}
                   onPress={() => {
@@ -1457,101 +1505,6 @@ export function ScanScreen({
                 >
                   <Text style={styles.scanAgainBtnText}>Scan Again</Text>
                 </TouchableOpacity>
-              </View>
-            ) : (sessionScans.length > 0) ? (
-              /* Premium Batch Results List View */
-              <View style={[styles.batchCardContainer, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
-                {/* Header Row */}
-                <View style={styles.batchHeader}>
-                  <Text style={[styles.batchTitle, { color: colors.text }]}>
-                    Batch Results ({sessionScans.length})
-                  </Text>
-                  <TouchableOpacity
-                    style={[styles.batchCloseBtn, { backgroundColor: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)' }]}
-                    onPress={() => {
-                      setSessionScans([]);
-                      sessionScannedCodesRef.current.clear();
-                      setSessionScanCount(0);
-                    }}
-                  >
-                    <Text style={{ color: colors.text, fontWeight: '700', fontSize: 11 }}>✕ Reset</Text>
-                  </TouchableOpacity>
-                </View>
-
-                {/* Scanned Barcodes List */}
-                <FlatList
-                  data={sessionScans}
-                  keyExtractor={(item) => item.id}
-                  contentContainerStyle={styles.batchListContent}
-                  style={styles.batchScrollList}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={[
-                        styles.batchItemRow,
-                        { borderColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)' }
-                      ]}
-                      onPress={() => setSelectedScanDetails(item)}
-                    >
-                      <View style={{ flex: 1 }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <View style={[styles.batchItemBadge, { backgroundColor: getClassificationStyles(item.classification).bg }]}>
-                            <Text style={[styles.batchItemBadgeText, { color: getClassificationStyles(item.classification).text }]}>
-                              {item.type}
-                            </Text>
-                          </View>
-                          {!!item.extractedDate && (
-                            <Text style={styles.batchItemDateText}>📅 {item.extractedDate}</Text>
-                          )}
-                          {!!item.salesOrder && (
-                            <Text style={[styles.batchItemDateText, { color: '#ff682c', marginLeft: 8 }]}>🛒 {item.salesOrder}</Text>
-                          )}
-                        </View>
-                        {item.classification === 'Web Link' ? (
-                          <TouchableOpacity
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              if (item.redirectUrl) {
-                                WebBrowser.openBrowserAsync(item.redirectUrl).catch((err) => {
-                                  console.warn('Could not open in-app browser:', err);
-                                });
-                              }
-                            }}
-                            style={{ alignSelf: 'flex-start', maxWidth: '100%' }}
-                          >
-                            <Text style={[styles.batchItemValueText, { color: isDark ? '#38bdf8' : '#0284c7', textDecorationLine: 'underline' }]} numberOfLines={1}>
-                              🔗 {item.data}
-                            </Text>
-                          </TouchableOpacity>
-                        ) : (
-                          <Text style={[styles.batchItemValueText, { color: colors.text }]} numberOfLines={1}>
-                            {item.data}
-                          </Text>
-                        )}
-
-                        {/* Display live API serial info directly in batch list */}
-                        {item.details?.serialApiData && (
-                          item.details.serialApiData.notFound ? (
-                            <View style={{ marginTop: 6, padding: 6, borderRadius: 6, backgroundColor: isDark ? 'rgba(244, 63, 94, 0.04)' : 'rgba(244, 63, 94, 0.06)', borderWidth: 1, borderColor: 'rgba(244, 63, 94, 0.12)' }}>
-                              <Text style={{ fontSize: 10, fontWeight: '700', color: '#f43f5e' }}>
-                                ⚠️ Serial number not found in SAP database
-                              </Text>
-                            </View>
-                          ) : (
-                            <View style={{ marginTop: 6, padding: 6, borderRadius: 6, backgroundColor: isDark ? 'rgba(255, 104, 44, 0.04)' : 'rgba(255, 104, 44, 0.06)', borderWidth: 1, borderColor: 'rgba(255, 104, 44, 0.12)' }}>
-                              <Text style={{ fontSize: 11, fontWeight: '700', color: isDark ? '#f8fafc' : '#0f172a' }}>
-                                📦 {item.details.serialApiData.product}
-                              </Text>
-                              <Text style={{ fontSize: 10, color: colors.mutedText, marginTop: 1 }}>
-                                Status: {item.details.serialApiData.status} • Sold to: {item.details.serialApiData.soldToParty}
-                              </Text>
-                            </View>
-                          )
-                        )}
-                      </View>
-                      <Text style={{ color: '#ff682c', fontSize: 12, fontWeight: '700' }}>📄 Details →</Text>
-                    </TouchableOpacity>
-                  )}
-                />
               </View>
             ) : (
               /* Camera Inactive Placeholder */
@@ -2382,6 +2335,52 @@ const styles = StyleSheet.create({
   successDoneBtnText: {
     color: '#ffffff',
     fontSize: 15,
+    fontWeight: '700',
+  },
+  cameraScannedHud: {
+    position: 'absolute',
+    bottom: 20,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(9, 13, 22, 0.85)',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    zIndex: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  hudHeader: {
+    marginBottom: 8,
+  },
+  hudCountText: {
+    color: '#ff682c',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  hudScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
+  hudItemBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+    maxWidth: 150,
+  },
+  hudItemText: {
+    color: '#f8fafc',
+    fontSize: 11,
     fontWeight: '700',
   },
 });

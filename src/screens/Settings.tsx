@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   StyleSheet,
   View,
@@ -7,6 +7,7 @@ import {
   TextInput,
   StatusBar,
   Platform,
+  ScrollView,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -32,100 +33,117 @@ export function Settings({
   onLogout,
 }: SettingsProps) {
   const isDark = theme === 'dark';
+  const [pushEnabled, setPushEnabled] = useState<boolean>(true);
 
   const colors = {
-    bg: isDark ? '#090d16' : '#f8fafc',
-    headerBg: isDark ? '#090d16' : '#ffffff',
+    bg: isDark ? '#090d16' : '#f0f4f6', // Premium light background
+    headerBg: isDark ? '#090d16' : '#f0f4f6', // Seamless background matching the screen color
     cardBg: isDark ? '#131a26' : '#ffffff',
-    text: isDark ? '#f8fafc' : '#0f172a',
-    mutedText: isDark ? '#475569' : '#64748b',
-    border: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.08)',
-    inputBg: isDark ? '#1e293b' : '#e2e8f0',
-    inputColor: isDark ? '#ffffff' : '#0f172a',
+    text: isDark ? '#f8fafc' : '#0c3b4e', // Slate dark blue/teal
+    mutedText: isDark ? '#64748b' : '#6b828a',
+    border: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)',
+    accent: '#f25c22', // HSL-tailored premium orange
+  };
+
+  const getInitials = (name: string) => {
+    if (!name) return 'TP';
+    const parts = name.trim().split(/\s+/);
+    if (parts.length === 1) return parts[0].substring(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   };
 
   return (
-    <SafeAreaView style={[styles.safeContainer, { backgroundColor: colors.bg }]}>
-      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.bg} />
+    <SafeAreaView style={[styles.safeContainer, { backgroundColor: colors.bg }]} edges={['bottom']}>
+      <StatusBar barStyle={isDark ? 'light-content' : 'dark-content'} backgroundColor={colors.headerBg} />
 
       {/* Header */}
-      <View style={[styles.header, { backgroundColor: colors.headerBg, borderColor: colors.border }]}>
-        <View style={styles.headerLeftRow}>
-          <TouchableOpacity style={[styles.backButton, !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' }]} onPress={onClose}>
-            <Text style={[styles.backButtonText, { color: colors.text }]}>← Back</Text>
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>Settings</Text>
+      <View style={[styles.header, { backgroundColor: colors.headerBg }]}>
+        <TouchableOpacity 
+          style={[styles.backButton, { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.05)' }]} 
+          onPress={onClose} 
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.backButtonText, { color: colors.text }]}>←</Text>
+        </TouchableOpacity>
+        <View style={styles.headerTitleContainer}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Profile</Text>
         </View>
+        <View style={styles.headerRightPlaceholder} />
       </View>
 
-      <View style={styles.content}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Profile Card */}
-        <View style={[styles.card, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Profile Settings</Text>
-          <View style={styles.formGroup}>
-            <Text style={[styles.inputLabel, { color: colors.text }]}>Name</Text>
+        <View style={[styles.profileCard, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
+          <View style={[styles.avatarContainer, { backgroundColor: colors.accent }]}>
+            <Text style={styles.avatarText}>{getInitials(profileName)}</Text>
+            <TouchableOpacity style={styles.cameraOverlay} activeOpacity={0.8}>
+              <Text style={styles.cameraIcon}>📸</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <View style={styles.profileInfo}>
             <TextInput
-              style={[styles.textInput, { backgroundColor: colors.inputBg, color: colors.inputColor }]}
+              style={[styles.profileNameInput, { color: colors.text }]}
               value={profileName}
               onChangeText={setProfileName}
-              placeholder="Your Name"
-              placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
+              placeholder="Enter Name"
+              placeholderTextColor={colors.mutedText}
+              autoCapitalize="words"
             />
-          </View>
-          <View style={styles.formGroup}>
-            <Text style={[styles.inputLabel, { color: colors.text }]}>Email</Text>
-            <TextInput
-              style={[styles.textInput, { backgroundColor: colors.inputBg, color: colors.inputColor }]}
-              value={profileEmail}
-              onChangeText={setProfileEmail}
-              placeholder="Your Email"
-              placeholderTextColor={isDark ? '#64748b' : '#94a3b8'}
-              keyboardType="email-address"
-              autoCapitalize="none"
-            />
+            <Text style={[styles.profileMutedText, { color: colors.mutedText }]}>
+              Tap name to edit
+            </Text>
           </View>
         </View>
 
-        {/* Theme Card */}
-        <View style={[styles.card, { backgroundColor: colors.cardBg, borderColor: colors.border, marginTop: 20 }]}>
-          <Text style={[styles.sectionTitle, { color: colors.text }]}>Appearance</Text>
-          <Text style={[styles.inputLabel, { color: colors.text, marginBottom: 12 }]}>Choose Theme</Text>
-          <View style={styles.themeRow}>
-            <TouchableOpacity
-              style={[
-                styles.themeBtn,
-                isDark && styles.themeBtnActive,
-                !isDark && { borderColor: 'rgba(0,0,0,0.1)' },
-              ]}
-              onPress={() => setTheme('dark')}
-            >
-              <Text style={[styles.themeBtnText, isDark && styles.themeBtnTextActive]}>🌙 Dark Mode</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.themeBtn,
-                !isDark && styles.themeBtnActiveLight,
-                isDark && { borderColor: 'rgba(255,255,255,0.08)' },
-              ]}
-              onPress={() => setTheme('light')}
-            >
-              <Text style={[styles.themeBtnText, !isDark && styles.themeBtnTextActiveLight]}>☀️ Light Mode</Text>
-            </TouchableOpacity>
-          </View>
+
+
+        {/* Preferences Section */}
+        <Text style={[styles.sectionHeader, { color: colors.mutedText }]}>PREFERENCES</Text>
+        <View style={[styles.sectionCard, { backgroundColor: colors.cardBg, borderColor: colors.border }]}>
+          <TouchableOpacity 
+            style={[styles.rowContainer, { borderBottomWidth: 1, borderBottomColor: colors.border }]}
+            activeOpacity={0.7}
+            onPress={() => setPushEnabled(!pushEnabled)}
+          >
+            <Text style={styles.rowIcon}>📱</Text>
+            <Text style={[styles.rowText, { color: colors.text }]}>Push notifications</Text>
+            <View style={styles.rowRightSide}>
+              <Text style={[styles.rowValueText, { color: colors.mutedText }]}>
+                {pushEnabled ? 'On' : 'Off'}
+              </Text>
+              <Text style={[styles.rowArrow, { color: colors.mutedText }]}>›</Text>
+            </View>
+          </TouchableOpacity>
+
+          <TouchableOpacity 
+            style={styles.rowContainer}
+            activeOpacity={0.7}
+            onPress={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+          >
+            <Text style={styles.rowIcon}>{theme === 'dark' ? '🌙' : '☀️'}</Text>
+            <Text style={[styles.rowText, { color: colors.text }]}>Theme</Text>
+            <View style={styles.rowRightSide}>
+              <Text style={[styles.rowValueText, { color: colors.mutedText }]}>
+                {theme === 'dark' ? 'Dark' : 'Light'}
+              </Text>
+              <Text style={[styles.rowArrow, { color: colors.mutedText }]}>›</Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
-        {/* Save Button */}
-        <TouchableOpacity style={styles.saveBtn} onPress={onClose}>
-          <Text style={styles.saveBtnText}>Save Settings</Text>
-        </TouchableOpacity>
-
-        {/* Log Out Button */}
+        {/* Sign Out Button */}
         {!!onLogout && (
-          <TouchableOpacity style={styles.logoutBtn} onPress={onLogout}>
-            <Text style={styles.logoutBtnText}>🚪 Log Out</Text>
+          <TouchableOpacity style={styles.signOutBtn} onPress={onLogout} activeOpacity={0.7}>
+            <Text style={styles.signOutBtnText}>Sign out</Text>
           </TouchableOpacity>
         )}
-      </View>
+
+        {/* Footer */}
+        <Text style={[styles.versionText, { color: colors.mutedText }]}>
+          MY SCAN HUB · v1.0.0
+        </Text>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -136,129 +154,201 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
     paddingTop: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 12 : 16,
     paddingBottom: 16,
-    borderBottomWidth: 1,
-  },
-  headerLeftRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    height: Platform.OS === 'android' ? 80 : 88,
   },
   backButton: {
-    marginRight: 14,
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: '#131a26',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    zIndex: 10,
   },
   backButtonText: {
-    fontSize: 12,
-    fontWeight: '600',
+    color: '#ffffff',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  headerTitleContainer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: Platform.OS === 'android' ? (StatusBar.currentHeight || 0) + 12 : 16,
+    bottom: 16,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: -1,
   },
   headerTitle: {
-    fontSize: 22,
+    color: '#ffffff',
+    fontSize: 20,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
-  content: {
-    flex: 1,
+  headerRightPlaceholder: {
+    width: 40,
+  },
+  scrollContent: {
     padding: 20,
   },
-  card: {
-    borderRadius: 20,
+  profileCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 24,
     padding: 20,
     borderWidth: 1,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
-    shadowRadius: 8,
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
+    marginBottom: 24,
   },
-  sectionTitle: {
-    fontSize: 16,
+  avatarContainer: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    position: 'relative',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  avatarText: {
+    color: '#ffffff',
+    fontSize: 28,
     fontWeight: '800',
-    marginBottom: 16,
-    letterSpacing: 0.2,
   },
-  formGroup: {
-    marginBottom: 14,
+  cameraOverlay: {
+    position: 'absolute',
+    bottom: -2,
+    right: -2,
+    backgroundColor: '#ffffff',
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: '#f0f3f4',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  inputLabel: {
+  cameraIcon: {
     fontSize: 12,
-    fontWeight: '600',
-    marginBottom: 6,
   },
-  textInput: {
-    height: 48,
-    borderRadius: 10,
+  profileInfo: {
+    marginLeft: 20,
+    flex: 1,
+    justifyContent: 'center',
+  },
+  profileNameInput: {
+    fontSize: 22,
+    fontWeight: '800',
+    padding: 0,
+    margin: 0,
+  },
+  profileMutedText: {
+    fontSize: 11,
+    fontWeight: '500',
+    marginTop: 2,
+    opacity: 0.7,
+  },
+  sectionHeader: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    marginBottom: 8,
+    marginTop: 16,
+    marginLeft: 4,
+  },
+  sectionCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.04,
+    shadowRadius: 8,
+    elevation: 2,
+    marginBottom: 20,
+  },
+  rowContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 14,
     paddingHorizontal: 16,
+    height: 54,
+  },
+  rowIcon: {
+    fontSize: 18,
+    marginRight: 14,
+    width: 24,
+    textAlign: 'center',
+  },
+  rowContent: {
+    flex: 1,
+  },
+  rowInput: {
     fontSize: 14,
     fontWeight: '600',
+    padding: 0,
+    margin: 0,
   },
-  themeRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  themeBtn: {
+  rowText: {
+    fontSize: 14,
+    fontWeight: '600',
     flex: 1,
-    height: 46,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'transparent',
-    backgroundColor: 'transparent',
+  },
+  rowRightSide: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    marginHorizontal: 4,
   },
-  themeBtnActive: {
-    backgroundColor: '#ff682c', // Dynamic brand orange
-    borderColor: '#ffa07a',
+  rowValueText: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginRight: 8,
   },
-  themeBtnActiveLight: {
-    backgroundColor: '#ff682c', // Dynamic brand orange
-    borderColor: '#ffa07a',
+  rowArrow: {
+    fontSize: 18,
+    fontWeight: '400',
+    opacity: 0.5,
   },
-  themeBtnText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#64748b',
-  },
-  themeBtnTextActive: {
-    color: '#ffffff',
-  },
-  themeBtnTextActiveLight: {
-    color: '#ffffff',
-  },
-  saveBtn: {
-    backgroundColor: '#ff682c', // Dynamic brand orange
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 30,
-    shadowColor: '#ff682c',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  saveBtnText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  logoutBtn: {
-    borderColor: '#f43f5e',
+  signOutBtn: {
+    height: 48,
+    borderRadius: 24,
     borderWidth: 1.5,
-    paddingVertical: 14,
-    borderRadius: 12,
+    borderColor: '#ef4444',
+    backgroundColor: 'transparent',
+    justifyContent: 'center',
     alignItems: 'center',
-    marginTop: 14,
+    marginTop: 28,
+    marginBottom: 16,
   },
-  logoutBtnText: {
-    color: '#f43f5e',
-    fontSize: 15,
+  signOutBtnText: {
+    color: '#ef4444',
+    fontSize: 16,
     fontWeight: '700',
+  },
+  versionText: {
+    textAlign: 'center',
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.2,
+    marginTop: 10,
+    marginBottom: 30,
+    opacity: 0.6,
   },
 });

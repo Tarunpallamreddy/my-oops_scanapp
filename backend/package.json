@@ -7,7 +7,9 @@
     "start": "node server.js"
   },
   "dependencies": {
+    "@google/generative-ai": "^0.21.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.4.2",
     "express": "^4.19.2",
     "morgan": "^1.10.0",
     "mssql": "^12.5.5",

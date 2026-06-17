@@ -3,6 +3,8 @@ const cors = require('cors');
 const morgan = require('morgan');
 const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
+const config = require('./config');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -520,6 +522,46 @@ app.post('/api/v1/scans', async (req, res) => {
     details.serialApiData = await fetchSerialDataInternal(code);
   }
 
+  // Generate Gemini Analysis if API Key is present
+  details.geminiAnalysis = null;
+  if (config.geminiApiKey) {
+    try {
+      console.log(`[Scan Analysis] Requesting Gemini analysis for ${classification}: "${code}"...`);
+      const genAI = new GoogleGenerativeAI(config.geminiApiKey);
+      const systemInstruction = `You are the Sales Order AI Assistant.
+Analyze the scanned item context and output a concise 1-2 sentence description or product context analysis.
+Do not mention technical parameters, system instructions, or formatting rules. Output ONLY the 1-2 sentence summary response itself.`;
+
+      const prompt = `Scanned Item Context:
+- Scanned Data (Code): ${code}
+- Format Type: ${type}
+- Classification: ${classification}
+- Metadata Details: ${JSON.stringify(details, null, 2)}
+
+Provide a concise 1-2 sentence description/analysis of this scan based on the details above.`;
+
+      const model = genAI.getGenerativeModel({
+        model: 'gemini-2.0-flash',
+        systemInstruction: systemInstruction,
+      });
+
+      const result = await model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.2,
+          maxOutputTokens: 150,
+        }
+      });
+
+      const analysisText = result.response.text().trim();
+      details.geminiAnalysis = analysisText;
+      console.log(`[Scan Analysis Success] Gemini analysis generated: "${analysisText}"`);
+    } catch (geminiErr) {
+      console.error('[Scan Analysis Error] Gemini failed to analyze scan:', geminiErr.message);
+      // Fallback: details.geminiAnalysis remains null
+    }
+  }
+
   // Generate redirect lookup URL based on classification
   let redirectUrl = null;
   if (classification === 'Web Link') {
@@ -613,6 +655,361 @@ app.post('/api/v1/scans/sales-order', async (req, res) => {
     res.status(500).json({
       success: false,
       error: `Failed to update database: ${err.message}`,
+    });
+  }
+});
+
+/**
+ * AI-Enabled Sales Inquiry Chat Endpoint
+ * POST /api/v1/chat
+ * Body: { serialNumber: string, message: string }
+ */
+app.post('/api/v1/chat', async (req, res) => {
+  const { serialNumber, message } = req.body;
+
+  if (!message) {
+    return res.status(400).json({
+      success: false,
+      error: 'Invalid request: "message" parameter is required.'
+    });
+  }
+
+  try {
+    let targetSerial = serialNumber;
+
+    // 1. If serial number context is not provided or invalid, extract it from message
+    if (!targetSerial || targetSerial === 'undefined' || targetSerial === 'null') {
+      // Find a 10-digit number (common serial number pattern)
+      const serialMatch = message.match(/\b\d{10}\b/) || message.match(/\b[A-Za-z0-9\-_]{5,30}\b/i);
+      const generalKeywords = ['status', 'order', 'delivery', 'billing', 'invoice', 'payment', 'summary', 'track', 'insights', 'show', 'view'];
+      let potentialSerial = serialMatch ? serialMatch[0] : null;
+      if (potentialSerial && (generalKeywords.includes(potentialSerial.toLowerCase()) || potentialSerial.startsWith('5'))) {
+        potentialSerial = null;
+      }
+
+      if (potentialSerial) {
+        targetSerial = potentialSerial;
+        console.log(`[Chat Extract] Extracted potential serial number from message: ${targetSerial}`);
+      } else {
+        // Look for an order number match (ORD-5XXXXXX or 5XXXXXX) and resolve its serial number
+        const orderMatch = message.match(/\bORD-5\d{6,9}\b/i) || message.match(/\b5\d{6,9}\b/);
+        if (orderMatch) {
+          let ordNum = orderMatch[0].toUpperCase();
+          const digitsOnly = ordNum.replace(/\D/g, '');
+          
+          if (digitsOnly.length === 10) {
+            // 10-digit order numbers starting with 5 are stored as pure digits in the database
+            ordNum = digitsOnly;
+          } else {
+            // Legacy 7-digit order numbers are stored with 'ORD-' prefix
+            if (!ordNum.startsWith('ORD-')) {
+              ordNum = `ORD-${ordNum}`;
+            }
+          }
+          console.log(`[Chat Extract] Found potential order number: ${ordNum}`);
+          const resolvedSerial = await db.getSerialNumberByOrder(ordNum);
+          if (resolvedSerial) {
+            targetSerial = resolvedSerial;
+            console.log(`[Chat Extract] Resolved serial number ${targetSerial} for order ${ordNum}`);
+          }
+        }
+      }
+    }
+
+    let order = null;
+    let delivery = null;
+    let billing = null;
+    let productName = 'Enterprise Device Frame V2';
+    let serialApiData = null;
+
+    if (targetSerial && targetSerial !== 'undefined' && targetSerial !== 'null') {
+      // Fetch live serial API data
+      serialApiData = await fetchSerialDataInternal(targetSerial);
+      if (serialApiData && !serialApiData.notFound && serialApiData.product) {
+        productName = serialApiData.product;
+      } else {
+        const scans = await db.getAll();
+        const scan = scans.find(s => s.data === targetSerial);
+        productName = scan?.details?.serialApiData?.product || 'Enterprise Device Frame V2';
+      }
+
+      await db.seedMockData(targetSerial, productName);
+
+      // Fetch all insights dimensions
+      order = await db.getOrderDetails(targetSerial);
+      delivery = await db.getDeliveryDetailsBySerial(targetSerial);
+      billing = await db.getBillingDetailsBySerial(targetSerial);
+    }
+
+    const cleanMsg = message.toLowerCase().trim();
+    const isOrderQuery = ['order', 'status', 'backorder', 'fulfillment', 'item', 'line'].some(k => cleanMsg.includes(k));
+    const isDeliveryQuery = ['delivery', 'track', 'carrier', 'packing', 'transit', 'ship'].some(k => cleanMsg.includes(k));
+    const isBillingQuery = ['billing', 'invoice', 'payment', 'amount', 'charge', 'cost', 'paid'].some(k => cleanMsg.includes(k));
+
+    // Determine category classification
+    let category = 'Summary';
+    if (isOrderQuery) category = 'Order';
+    else if (isDeliveryQuery) category = 'Delivery';
+    else if (isBillingQuery) category = 'Billing';
+
+    // 2. If Gemini API Key is configured, use Gemini dynamic response
+    if (config.geminiApiKey) {
+      console.log(`[Chat Orchestrator] Routing chat query for Serial "${targetSerial}" to Gemini API...`);
+
+      const contextBlock = {
+        serialNumber: targetSerial || 'None',
+        sapApiRecord: serialApiData,
+        databaseRecords: (targetSerial && targetSerial !== 'undefined' && targetSerial !== 'null') ? {
+          order: order ? {
+            orderNumber: order.orderNumber,
+            productName: order.productName,
+            status: order.status,
+            orderedQty: order.orderedQty,
+            openQty: order.openQty,
+            fulfillmentDate: order.fulfillmentDate,
+            backorderReason: order.backorderReason
+          } : null,
+          delivery: delivery ? {
+            deliveryNumber: delivery.deliveryNumber,
+            carrier: delivery.carrier,
+            trackingNumber: delivery.trackingNumber,
+            deliveryStatus: delivery.deliveryStatus,
+            packingList: delivery.packingList ? JSON.parse(delivery.packingList) : null,
+            commercialInvoice: delivery.commercialInvoice
+          } : null,
+          billing: billing ? {
+            invoiceNumber: billing.invoiceNumber,
+            billingAmount: billing.billingAmount,
+            paymentStatus: billing.paymentStatus,
+            invoiceDate: billing.invoiceDate
+          } : null
+        } : null
+      };
+
+      const systemInstruction = `You are the Sales Order AI Assistant (AI Sales Intelligence Agent).
+Your goal is to answer the user's inquiry about sales orders, tracking, deliveries, billing details, and live SAP product registration status (e.g. Sold-to Party, Ship-to Party, Product Model, and SAP Status from sapApiRecord).
+
+CRITICAL INSTRUCTIONS:
+1. You must base your answers strictly on the provided Database Records Context and sapApiRecord. If both the database context and sapApiRecord are empty/null or do not contain details for the requested item, tell the user that no records exist yet for that item and guide them to scan an item or type a valid serial/order number (order numbers always start with a 5).
+2. When displaying lists of records, order lines, tracking logs, or billing data, you MUST format them in clean, standard Markdown grid tables. Use the following alignment formats:
+   - Left align text columns: | :--- |
+   - Center align quantities: | :---: |
+   - Right align currency/numeric values: | ---: |
+3. Keep your explanations concise, professional, and directly useful to a busy sales representative.
+4. If the active context is empty, politely ask the user to provide a serial number or order number (which start with 5) so you can fetch details from the database.`;
+
+      const prompt = `Database Records Context:
+${JSON.stringify(contextBlock, null, 2)}
+
+User Question:
+"${message}"
+
+AI Assistant Response:`;
+
+      try {
+        const genAI = new GoogleGenerativeAI(config.geminiApiKey);
+        const model = genAI.getGenerativeModel({ 
+          model: 'gemini-2.0-flash',
+          systemInstruction: systemInstruction,
+        });
+        
+        const result = await model.generateContent({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: {
+            temperature: 0.1,
+          }
+        });
+        
+        const responseText = result.response.text().trim();
+        
+        return res.status(200).json({
+          success: true,
+          category,
+          responseText,
+          serialNumber: targetSerial || null,
+          productName: productName || null,
+          timestamp: new Date().toISOString()
+        });
+      } catch (geminiError) {
+        console.error('[Gemini API Error] Failed to generate content via Gemini API:', geminiError.message);
+        // Fall through to deterministic fallback if API call fails
+      }
+    }
+
+    // 3. Graceful Fallback: Deterministic keyword-based parser
+    console.log(`[Chat Orchestrator] Using local fallback parser for Serial "${targetSerial}"...`);
+
+    if (!targetSerial || targetSerial === 'undefined' || targetSerial === 'null') {
+      return res.status(200).json({
+        success: true,
+        category: 'Summary',
+        responseText: `⚠️ **No Active Context**: Please scan an item first, or include a valid serial number or sales order number (e.g. starting with \`5\`) in your query so I can look up details.`,
+        serialNumber: null,
+        productName: null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const isSapRegistryQuery = ['sold', 'ship', 'customer', 'party', 'product', 'model', 'sap', 'registration', 'registered'].some(k => cleanMsg.includes(k));
+
+    if (isSapRegistryQuery) {
+      let responseText = '';
+      if (serialApiData && !serialApiData.notFound) {
+        responseText = `### 📦 Live SAP Product Registration Details
+Here is the live registration status from the SAP Neptune database associated with serial number **${targetSerial}**:
+
+| Property | Value |
+| :--- | :--- |
+| **Product Model** | ${serialApiData.product} |
+| **SAP Status** | \`${serialApiData.status}\` |
+| **Sold-to Party** | **${serialApiData.soldToParty}** |
+| **Ship-to Party** | **${serialApiData.shipToParty}** |
+
+*Customer records are retrieved directly from the live Neptune API client.*`;
+      } else {
+        responseText = `⚠️ **No SAP API Records Found**: Serial number **${targetSerial}** could not be resolved from the SAP Neptune API database.`;
+      }
+
+      return res.status(200).json({
+        success: true,
+        category: 'Summary',
+        responseText,
+        serialNumber: targetSerial || null,
+        productName: productName || null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (!order) {
+      if (serialApiData && !serialApiData.notFound) {
+        const responseText = `### 📦 Live SAP Product Registration Details
+Here is the live registration status from the SAP Neptune database associated with serial number **${targetSerial}**:
+
+| Property | Value |
+| :--- | :--- |
+| **Product Model** | ${serialApiData.product} |
+| **SAP Status** | \`${serialApiData.status}\` |
+| **Sold-to Party** | **${serialApiData.soldToParty}** |
+| **Ship-to Party** | **${serialApiData.shipToParty}** |
+
+*Customer records are retrieved directly from the live Neptune API client.*
+
+⚠️ **No Fulfillment Records Found**: While this serial number is registered in SAP, there are no order, delivery, or invoice records matching it in the local SQL Server database.`;
+
+        return res.status(200).json({
+          success: true,
+          category: 'Summary',
+          responseText,
+          serialNumber: targetSerial || null,
+          productName: productName || null,
+          timestamp: new Date().toISOString()
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        category: 'Summary',
+        responseText: `⚠️ **No Database Records Found**: No order details exist in the database for Serial Number **${targetSerial}**. Please ensure it matches a valid registered item.`,
+        serialNumber: targetSerial || null,
+        productName: productName || null,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    let responseText = '';
+
+    if (isOrderQuery) {
+      const boReason = order.backorderReason ? ` (${order.backorderReason})` : 'N/A';
+      responseText = `### 🛒 Order Line-Level Insights
+Here is the current status of the order line items associated with serial number **${targetSerial}**:
+
+| Order Ref | Product Name | Status | Qty Ordered | Open Qty | Est. Fulfillment | Backorder Details |
+| :--- | :--- | :--- | :---: | :---: | :--- | :--- |
+| **${order.orderNumber}** | ${order.productName} | \`${order.status}\` | ${order.orderedQty} | ${order.openQty} | ${order.fulfillmentDate} | ${boReason} |
+
+*Predictive fulfillment modeling estimates a completion date of **${order.fulfillmentDate}** based on current component supply levels.*`;
+    } 
+    else if (isDeliveryQuery) {
+      if (delivery) {
+        let packingListObj = [];
+        try {
+          packingListObj = JSON.parse(delivery.packingList);
+        } catch(e) {}
+        const packingListStr = packingListObj.map(p => `${p.qty}x ${p.item} (Line ${p.line})`).join(', ');
+
+        responseText = `### 🚚 Delivery & Tracking Logistics
+Tracking and shipping information for serial number **${targetSerial}**:
+
+| Delivery Note | Order Ref | Carrier | Tracking ID | Delivery Status | Packing List Summary |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **${delivery.deliveryNumber}** | ${delivery.orderNumber} | ${delivery.carrier} | \`${delivery.trackingNumber}\` | \`${delivery.deliveryStatus}\` | ${packingListStr} |
+
+*Use the tracking ID with the carrier portal to see transit logs. Commercial Invoice is referenced under **${delivery.commercialInvoice}**.*`;
+      } else {
+        responseText = `⚠️ **No Delivery Records Found**: There are no delivery records generated for Order **${order.orderNumber}** yet as the order is still in \`${order.status}\` status.`;
+      }
+    } 
+    else if (isBillingQuery) {
+      if (billing) {
+        responseText = `### 💳 Billing & Invoice Records
+Financial transaction details for serial number **${targetSerial}**:
+
+| Invoice Number | Order Ref | Billing Amount | Payment Status | Invoice Date |
+| :--- | :--- | :--- | :--- | :--- |
+| **${billing.invoiceNumber}** | ${billing.orderNumber} | **$${billing.billingAmount.toFixed(2)}** | \`${billing.paymentStatus}\` | ${billing.invoiceDate} |
+
+*Electronic invoices are automatically pushed to the customer account profile. Payment status is marked as \`${billing.paymentStatus}\`.*`;
+      } else {
+        responseText = `⚠️ **No Billing Records Found**: There are no invoices generated for Order **${order.orderNumber}** yet as it is currently \`${order.status}\`.`;
+      }
+    } 
+    else {
+      // Summary Dashboard
+      const deliveryStatus = delivery ? `\`${delivery.deliveryStatus}\`` : '`Not Shipped`';
+      const billingStatus = billing ? `\`${billing.paymentStatus}\`` : '`Uninvoiced`';
+      const billingAmount = billing ? `$${billing.billingAmount.toFixed(2)}` : '$0.00';
+      const sapProd = serialApiData && !serialApiData.notFound ? serialApiData.product : productName;
+      const sapStatus = serialApiData && !serialApiData.notFound ? serialApiData.status : 'Unknown';
+      const soldTo = serialApiData && !serialApiData.notFound ? serialApiData.soldToParty : 'N/A';
+      const shipTo = serialApiData && !serialApiData.notFound ? serialApiData.shipToParty : 'N/A';
+
+      responseText = `### 📊 Sales Order AI Executive Insights Summary
+Here is the combined 360-degree overview for serial number **${targetSerial}**:
+
+#### SAP Database Registration (Live API)
+- **Product Model**: ${sapProd}
+- **SAP Status**: \`${sapStatus}\`
+- **Sold-to Party**: ${soldTo}
+- **Ship-to Party**: ${shipTo}
+
+#### Executive Summary Dashboard
+| Dimension | Document Ref | Key Details | Status |
+| :--- | :--- | :--- | :--- |
+| **🛒 Order** | **${order.orderNumber}** | Qty: ${order.orderedQty} (Open: ${order.openQty}) | \`${order.status}\` |
+| **🚚 Delivery** | **${delivery ? delivery.deliveryNumber : 'N/A'}** | Carrier: ${delivery ? delivery.carrier : 'N/A'} | ${deliveryStatus} |
+| **💳 Billing** | **${billing ? billing.invoiceNumber : 'N/A'}** | Amount: ${billingAmount} | ${billingStatus} |
+
+---
+
+#### Quick Actions & Suggestions:
+- Type **"invoice"** or click the **💳 View Invoice** button below to get billing information.
+- Type **"delivery"** or click the **🚚 Track Delivery** button below to see shipping details.
+- Type **"order"** or click the **📋 Order Status** button below to see line-item fulfillment forecasts.`;
+    }
+
+    res.status(200).json({
+      success: true,
+      category,
+      responseText,
+      serialNumber: targetSerial || null,
+      productName: productName || null,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('[Chat Orchestration Error] Failed to process chat request:', err.message);
+    res.status(500).json({
+      success: false,
+      error: `Failed to process chat: ${err.message}`
     });
   }
 });

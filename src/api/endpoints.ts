@@ -43,4 +43,20 @@ export const scanApi = {
       }),
     });
   },
+
+  /**
+   * Sends a user query about a scanned item to the Sales Intelligence Chat API.
+   */
+  sendChatInquiry: async (
+    serialNumber: string,
+    message: string
+  ): Promise<ApiResponse<{ success: boolean; category: string; responseText: string }>> => {
+    return apiClient<{ success: boolean; category: string; responseText: string }>('/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        serialNumber,
+        message,
+      }),
+    });
+  },
 };
