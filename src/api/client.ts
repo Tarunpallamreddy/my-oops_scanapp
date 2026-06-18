@@ -1,7 +1,16 @@
 import { NativeModules, Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ApiResponse } from '../types';
 
 let activeBaseUrl: string | null = null;
+
+// Load cached active URL on client startup
+AsyncStorage.getItem('@mygoscan:active_base_url').then(val => {
+  if (val) {
+    activeBaseUrl = val;
+    console.log(`[API Client] Loaded cached active base URL from storage: ${activeBaseUrl}`);
+  }
+}).catch(() => {});
 
 const getCandidateBaseUrls = () => {
   const urls: string[] = [];
@@ -33,6 +42,43 @@ const getCandidateBaseUrls = () => {
   return Array.from(new Set(urls));
 };
 
+async function discoverBaseUrl(): Promise<string | null> {
+  if (activeBaseUrl) return activeBaseUrl;
+  
+  const urls = getCandidateBaseUrls();
+  console.log(`[API Client Discovery] Starting discovery on ${urls.length} candidates...`);
+  
+  const checks = urls.map(async (baseUrl) => {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const res = await fetch(`${baseUrl}/health`, {
+        method: 'GET',
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      if (res.ok) {
+        return baseUrl;
+      }
+    } catch (e) {
+      // Ignore
+    }
+    return null;
+  });
+
+  const results = await Promise.all(checks);
+  const workingUrl = results.find((r) => r !== null);
+  if (workingUrl) {
+    console.log(`[API Client Discovery] Successfully discovered active base URL: ${workingUrl}`);
+    activeBaseUrl = workingUrl;
+    await AsyncStorage.setItem('@mygoscan:active_base_url', workingUrl).catch(() => {});
+    return workingUrl;
+  }
+  
+  console.log(`[API Client Discovery] No active base URL could be discovered.`);
+  return null;
+}
+
 interface RequestConfig extends RequestInit {
   params?: Record<string, string>;
 }
@@ -55,6 +101,11 @@ export async function apiClient<T>(
     ...headers,
   };
 
+  // If we don't have a cached active base URL, perform quick parallel discovery
+  if (!activeBaseUrl) {
+    await discoverBaseUrl();
+  }
+
   // If we have a cached working base URL, prioritize it, then fallback to others
   const urlsToTry = activeBaseUrl
     ? [activeBaseUrl, ...getCandidateBaseUrls().filter((u) => u !== activeBaseUrl)]
@@ -73,9 +124,10 @@ export async function apiClient<T>(
     try {
       console.log(`[API Client] Trying request to: ${url}`);
       
-      // Use a short 2.5 second timeout during URL discovery to fail quickly
+      // Use 20s for chat queries to allow for LLM and Neptune API processing, and 2.5s for normal requests.
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2500);
+      const timeoutMs = endpoint.includes('chat') ? 20000 : 2500;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
       const response = await fetch(url, {
         headers: mergedHeaders,
@@ -100,6 +152,7 @@ export async function apiClient<T>(
         if (activeBaseUrl !== baseUrl) {
           console.log(`[API Client] Connection success. Caching active base URL: ${baseUrl}`);
           activeBaseUrl = baseUrl;
+          AsyncStorage.setItem('@mygoscan:active_base_url', baseUrl).catch(() => {});
         }
         
         return { success: true, data, statusCode };
@@ -116,6 +169,7 @@ export async function apiClient<T>(
         if (activeBaseUrl !== baseUrl) {
           console.log(`[API Client] Connected to server but got status ${statusCode}. Caching active base URL: ${baseUrl}`);
           activeBaseUrl = baseUrl;
+          AsyncStorage.setItem('@mygoscan:active_base_url', baseUrl).catch(() => {});
         }
         
         return { success: false, error, statusCode };
@@ -134,3 +188,4 @@ export async function apiClient<T>(
     statusCode: lastStatusCode,
   };
 }
+

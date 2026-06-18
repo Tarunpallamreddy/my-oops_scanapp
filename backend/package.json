@@ -4,10 +4,12 @@
   "description": "Backend API server for MyGo Scan Mobile app",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "jest"
   },
   "dependencies": {
     "@google/generative-ai": "^0.21.0",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.19.2",
@@ -15,5 +17,9 @@
     "mssql": "^12.5.5",
     "uuid": "^9.0.1"
   },
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2"
+  }
 }
