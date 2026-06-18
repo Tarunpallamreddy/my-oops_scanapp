@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   StyleSheet,
   View,
@@ -12,10 +12,14 @@ import {
   TextInput,
   Modal,
   ScrollView,
+  Linking,
+  Animated,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as WebBrowser from 'expo-web-browser';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ScannerOverlay } from './ScannerOverlay';
 import { ScanHistoryCard } from './ScanHistoryCard';
@@ -212,7 +216,7 @@ interface ScanScreenProps {
   profileEmail: string;
   theme: 'dark' | 'light';
   onOpenChat: (serialNumber: string, productName: string) => void;
-  onOpenDrawer: () => void;
+  onOpenSettings: () => void;
 }
 
 export function ScanScreen({
@@ -220,9 +224,34 @@ export function ScanScreen({
   profileEmail,
   theme,
   onOpenChat,
-  onOpenDrawer,
+  onOpenSettings,
 }: ScanScreenProps) {
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
+
+  // Animation value for AskMe button
+  const pulseAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, {
+          toValue: 1,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulseAnim, {
+          toValue: 0,
+          duration: 1500,
+          useNativeDriver: true,
+        }),
+      ])
+    ).start();
+  }, [pulseAnim]);
+
+  const askMeScale = pulseAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0.96, 1.04],
+  });
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [permission, requestPermission] = useCameraPermissions();
   const [flash, setFlash] = useState<boolean>(false);
@@ -419,6 +448,50 @@ export function ScanScreen({
   const [toastMessage, setToastMessage] = useState<string>('');
   const [singleScanResult, setSingleScanResult] = useState<ScanResult | null>(null);
   const [selectedScanDetails, setSelectedScanDetails] = useState<ScanResult | null>(null);
+  const [downloadingPdf, setDownloadingPdf] = useState<boolean>(false);
+
+  const handleDownloadPDF = async (url: string) => {
+    if (!url) return;
+    setDownloadingPdf(true);
+    try {
+      let filename = 'downloaded_document.pdf';
+      try {
+        const urlParts = url.split('/');
+        const lastPart = urlParts[urlParts.length - 1].split('?')[0];
+        if (lastPart && lastPart.toLowerCase().endsWith('.pdf')) {
+          filename = lastPart;
+        } else if (lastPart) {
+          filename = lastPart + (lastPart.includes('.') ? '' : '.pdf');
+        }
+      } catch (e) {
+        // Fallback
+      }
+
+      const fileUri = `${FileSystem.documentDirectory}${filename}`;
+      const downloadResult = await FileSystem.downloadAsync(url, fileUri);
+      
+      if (downloadResult.status !== 200) {
+        throw new Error(`Failed to download file: Status code ${downloadResult.status}`);
+      }
+
+      const isSharingAvailable = await Sharing.isAvailableAsync();
+      if (!isSharingAvailable) {
+        Alert.alert('Unsupported', 'Sharing / saving files is not available on this device');
+        return;
+      }
+
+      await Sharing.shareAsync(downloadResult.uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Save / Share PDF File',
+        UTI: 'com.adobe.pdf',
+      });
+    } catch (error: any) {
+      console.error('PDF Download Error:', error);
+      Alert.alert('Download Failed', error?.message || 'Could not download the file.');
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
 
   const totalScans = scans.length;
   const syncedScans = scans.filter((s) => s.status === 'synced').length;
@@ -768,7 +841,7 @@ export function ScanScreen({
 
   const handleToggleSelectScan = (id: string) => {
     const scan = scans.find(s => s.id === id);
-    if (scan && scan.salesOrder) {
+    if (scan && (scan.salesOrder || scan.classification === 'Web Link')) {
       return;
     }
 
@@ -1043,18 +1116,45 @@ export function ScanScreen({
                   </TouchableOpacity>
                 ) : (
                   !!selectedScanDetails.redirectUrl && (
-                    <TouchableOpacity
-                      style={styles.modalOpenLinkBtn}
-                      onPress={() => {
-                        if (selectedScanDetails.redirectUrl) {
-                          WebBrowser.openBrowserAsync(selectedScanDetails.redirectUrl).catch((err) => {
-                            console.warn('Could not open in-app browser:', err);
-                          });
-                        }
-                      }}
-                    >
-                      <Text style={styles.modalOpenLinkBtnText}>🔗 Open Lookup / Search Link</Text>
-                    </TouchableOpacity>
+                    <View style={{ width: '100%' }}>
+                      <TouchableOpacity
+                        style={styles.modalOpenLinkBtn}
+                        onPress={() => {
+                          if (selectedScanDetails.redirectUrl) {
+                            WebBrowser.openBrowserAsync(selectedScanDetails.redirectUrl).catch((err) => {
+                              console.warn('Could not open in-app browser:', err);
+                            });
+                          }
+                        }}
+                      >
+                        <Text style={styles.modalOpenLinkBtnText}>🔗 Open Lookup / Search Link</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.modalOpenLinkBtn, { marginTop: 8, backgroundColor: '#ff682c' }]}
+                        disabled={downloadingPdf}
+                        onPress={() => {
+                          if (selectedScanDetails.redirectUrl) {
+                            if (selectedScanDetails.redirectUrl.toLowerCase().includes('.pdf')) {
+                              handleDownloadPDF(selectedScanDetails.redirectUrl);
+                            } else {
+                              Linking.openURL(selectedScanDetails.redirectUrl).catch((err) => {
+                                console.warn('Could not open system browser:', err);
+                              });
+                            }
+                          }
+                        }}
+                      >
+                        {downloadingPdf && selectedScanDetails.redirectUrl.toLowerCase().includes('.pdf') ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <Text style={styles.modalOpenLinkBtnText}>
+                            {selectedScanDetails.redirectUrl.toLowerCase().includes('.pdf')
+                              ? '📥 Download / Save PDF'
+                              : '📥 Open in System Browser'}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   )
                 )}
               </View>
@@ -1265,17 +1365,50 @@ export function ScanScreen({
       {/* Top Header */}
       <View style={[styles.header, { backgroundColor: colors.headerBg, borderColor: colors.border }]}>
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Text style={[styles.headerTitle, { color: colors.text }]}>MyScanHub</Text>
+        </View>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          <Animated.View style={{ transform: [{ scale: askMeScale }] }}>
+            <TouchableOpacity
+              style={[
+                styles.headerButton,
+                {
+                  backgroundColor: '#ff682c',
+                  borderColor: '#ff7f4d',
+                  marginRight: 10,
+                  flexDirection: 'row',
+                  paddingHorizontal: 14,
+                  paddingVertical: 8,
+                  borderRadius: 20,
+                  shadowColor: '#ff682c',
+                  shadowOffset: { width: 0, height: 4 },
+                  shadowOpacity: 0.3,
+                  shadowRadius: 5,
+                  elevation: 5,
+                }
+              ]}
+              onPress={() => onOpenChat('', '')}
+            >
+              <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>🤖 AskMe</Text>
+            </TouchableOpacity>
+          </Animated.View>
+
           <TouchableOpacity
             style={[
               styles.headerButton,
-              { marginRight: 12 },
-              !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' },
+              {
+                backgroundColor: isDark ? '#1e293b' : '#e2e8f0',
+                borderColor: isDark ? '#334155' : '#cbd5e1',
+                flexDirection: 'row',
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderRadius: 20,
+              }
             ]}
-            onPress={onOpenDrawer}
+            onPress={onOpenSettings}
           >
-            <Text style={[styles.headerButtonText, !isDark && { color: '#0f172a' }, { fontSize: 16 }]}>☰</Text>
+            <Text style={{ color: isDark ? '#f8fafc' : '#0f172a', fontSize: 13, fontWeight: '600' }}>👤 Profile</Text>
           </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: colors.text }]}>My Scan Hub</Text>
         </View>
       </View>
 
@@ -1533,18 +1666,45 @@ export function ScanScreen({
                   </TouchableOpacity>
                 ) : (
                   !!singleScanResult.redirectUrl && (
-                    <TouchableOpacity
-                      style={styles.openLinkBtn}
-                      onPress={() => {
-                        if (singleScanResult.redirectUrl) {
-                          WebBrowser.openBrowserAsync(singleScanResult.redirectUrl).catch((err) => {
-                            console.warn('Could not open in-app browser:', err);
-                          });
-                        }
-                      }}
-                    >
-                      <Text style={styles.openLinkBtnText}>🔗 Open Lookup / Search Link</Text>
-                    </TouchableOpacity>
+                    <View style={{ width: '100%' }}>
+                      <TouchableOpacity
+                        style={styles.openLinkBtn}
+                        onPress={() => {
+                          if (singleScanResult.redirectUrl) {
+                            WebBrowser.openBrowserAsync(singleScanResult.redirectUrl).catch((err) => {
+                              console.warn('Could not open in-app browser:', err);
+                            });
+                          }
+                        }}
+                      >
+                        <Text style={styles.openLinkBtnText}>🔗 Open Lookup / Search Link</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.openLinkBtn, { marginTop: 8, backgroundColor: '#ff682c' }]}
+                        disabled={downloadingPdf}
+                        onPress={() => {
+                          if (singleScanResult.redirectUrl) {
+                            if (singleScanResult.redirectUrl.toLowerCase().includes('.pdf')) {
+                              handleDownloadPDF(singleScanResult.redirectUrl);
+                            } else {
+                              Linking.openURL(singleScanResult.redirectUrl).catch((err) => {
+                                console.warn('Could not open system browser:', err);
+                              });
+                            }
+                          }
+                        }}
+                      >
+                        {downloadingPdf && singleScanResult.redirectUrl.toLowerCase().includes('.pdf') ? (
+                          <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                          <Text style={styles.openLinkBtnText}>
+                            {singleScanResult.redirectUrl.toLowerCase().includes('.pdf')
+                              ? '📥 Download / Save PDF'
+                              : '📥 Open in System Browser'}
+                          </Text>
+                        )}
+                      </TouchableOpacity>
+                    </View>
                   )
                 )}
 

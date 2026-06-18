@@ -141,7 +141,7 @@ export function Settings({
 
         {/* Footer */}
         <Text style={[styles.versionText, { color: colors.mutedText }]}>
-          MY SCAN HUB · v1.0.0
+          MYSCANHUB · v1.0.0
         </Text>
       </ScrollView>
     </SafeAreaView>

@@ -177,7 +177,10 @@ export function ChatScreen({
   const [isScanModalVisible, setIsScanModalVisible] = useState<boolean>(false);
   const [isPhotoModalVisible, setIsPhotoModalVisible] = useState<boolean>(false);
   const [flash, setFlash] = useState<boolean>(false);
+  const [scannedCodes, setScannedCodes] = useState<string[]>([]);
   const cameraRef = useRef<any>(null);
+  const lastScannedCodeRef = useRef<string>('');
+  const lastScannedTimeRef = useRef<number>(0);
 
   const handleOpenScanModal = async () => {
     if (!cameraPermission || !cameraPermission.granted) {
@@ -191,6 +194,9 @@ export function ChatScreen({
       }
     }
     setFlash(false);
+    setScannedCodes([]);
+    lastScannedCodeRef.current = '';
+    lastScannedTimeRef.current = 0;
     setIsScanModalVisible(true);
   };
 
@@ -212,13 +218,31 @@ export function ChatScreen({
   const handleChatBarcodeScanned = (result: { type: string; data: string }) => {
     if (isScanModalVisible) {
       const { data } = result;
-      setIsScanModalVisible(false);
+      const now = Date.now();
+      
+      // Debounce logic: prevent duplicate scans within 1.5 seconds of the same code
+      if (lastScannedCodeRef.current === data && now - lastScannedTimeRef.current < 1500) {
+        return;
+      }
+      
+      lastScannedCodeRef.current = data;
+      lastScannedTimeRef.current = now;
 
-      const query = `details of ${data}`;
+      setScannedCodes((prev) => {
+        if (prev.includes(data)) {
+          return prev; // Avoid duplicate list entries
+        }
+        return [...prev, data];
+      });
+    }
+  };
+
+  const handleFinishMultiScan = () => {
+    setIsScanModalVisible(false);
+    if (scannedCodes.length > 0) {
+      const joinedCodes = scannedCodes.join(', ');
+      const query = `details of ${joinedCodes}`;
       setInputText(query);
-      setTimeout(() => {
-        handleSendMessage(query);
-      }, 300);
     }
   };
 
@@ -669,15 +693,48 @@ export function ChatScreen({
           />
           <ScannerOverlay flash={flash} onToggleFlash={() => setFlash(!flash)} />
 
-          {/* Top Close Header */}
+          {/* Top Close Header with Done Button */}
           <SafeAreaView style={styles.scanModalHeader} edges={['top']}>
             <TouchableOpacity
               style={styles.scanModalCloseBtn}
               onPress={() => setIsScanModalVisible(false)}
             >
-              <Text style={styles.scanModalCloseText}>✕ Close</Text>
+              <Text style={styles.scanModalCloseText}>✕ Cancel</Text>
             </TouchableOpacity>
+
+            {scannedCodes.length > 0 && (
+              <TouchableOpacity
+                style={[styles.scanModalCloseBtn, { backgroundColor: '#ff682c', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }]}
+                onPress={handleFinishMultiScan}
+              >
+                <Text style={[styles.scanModalCloseText, { color: '#ffffff', fontWeight: 'bold' }]}>✓ Done ({scannedCodes.length})</Text>
+              </TouchableOpacity>
+            )}
           </SafeAreaView>
+
+          {/* Scanned Items HUD Overlay for Multi Scan Mode */}
+          {scannedCodes.length > 0 && (
+            <View style={styles.cameraScannedHud}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <Text style={styles.hudCountText}>Scanned Batch: {scannedCodes.length} item(s)</Text>
+                <TouchableOpacity onPress={() => setScannedCodes([])}>
+                  <Text style={{ color: '#ef4444', fontSize: 11, fontWeight: '700' }}>Clear All</Text>
+                </TouchableOpacity>
+              </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.hudScrollContent}
+                keyboardShouldPersistTaps="handled"
+              >
+                {scannedCodes.map((code, index) => (
+                  <View key={index} style={styles.hudItemBadge}>
+                    <Text style={styles.hudItemText} numberOfLines={1}>{code}</Text>
+                  </View>
+                ))}
+              </ScrollView>
+            </View>
+          )}
         </View>
       </Modal>
 
@@ -1053,6 +1110,52 @@ const styles = StyleSheet.create({
   shutterCancelText: {
     color: '#ffffff',
     fontSize: 16,
+    fontWeight: '700',
+  },
+  cameraScannedHud: {
+    position: 'absolute',
+    bottom: 40,
+    left: 16,
+    right: 16,
+    backgroundColor: 'rgba(9, 13, 22, 0.85)',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    zIndex: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  hudHeader: {
+    marginBottom: 8,
+  },
+  hudCountText: {
+    color: '#ff682c',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  hudScrollContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 2,
+  },
+  hudItemBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    marginRight: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+    maxWidth: 150,
+  },
+  hudItemText: {
+    color: '#f8fafc',
+    fontSize: 11,
     fontWeight: '700',
   },
 });

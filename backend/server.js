@@ -320,22 +320,29 @@ app.post('/api/v1/chat', async (req, res) => {
   }
 
   try {
-    // Extract potential serial number from message first to override context if present.
+    // Extract potential serial numbers from message first to override context if present.
     // Must be either a 10-digit number or an alphanumeric word of 5-30 characters containing at least one digit.
-    const serialMatch = message.match(/\b\d{10}\b/) || message.match(/\b(?=[A-Za-z0-9\-_]*\d)[A-Za-z0-9\-_]{5,30}\b/i);
-    const generalKeywords = ['status', 'order', 'delivery', 'billing', 'invoice', 'payment', 'summary', 'track', 'insights', 'show', 'view'];
-    let potentialSerial = serialMatch ? serialMatch[0] : null;
-    if (potentialSerial && (generalKeywords.includes(potentialSerial.toLowerCase()) || potentialSerial.startsWith('5'))) {
-      potentialSerial = null;
-    }
+    const allMatches = [];
+    const digitMatches = message.match(/\b\d{10}\b/g);
+    if (digitMatches) allMatches.push(...digitMatches);
+    const alphaMatches = message.match(/\b(?=[A-Za-z0-9\-_]*\d)[A-Za-z0-9\-_]{5,30}\b/gi);
+    if (alphaMatches) allMatches.push(...alphaMatches);
 
+    const generalKeywords = ['status', 'order', 'delivery', 'billing', 'invoice', 'payment', 'summary', 'track', 'insights', 'show', 'view'];
+    const potentialSerials = [...new Set(allMatches)].filter(s => {
+      if (!s) return false;
+      const lower = s.toLowerCase();
+      return !generalKeywords.includes(lower) && !s.startsWith('5');
+    });
+
+    let potentialSerial = potentialSerials.length > 0 ? potentialSerials[0] : null;
     let targetSerial = potentialSerial || serialNumber;
     if (targetSerial === 'undefined' || targetSerial === 'null') {
       targetSerial = null;
     }
 
-    if (potentialSerial) {
-      console.log(`[Chat Extract] Extracted serial number from message (precedence): ${targetSerial}`);
+    if (potentialSerials.length > 0) {
+      console.log(`[Chat Extract] Extracted potential serials from message: ${potentialSerials.join(', ')}`);
     }
 
     let productName = 'Enterprise Device Frame V2';
@@ -360,9 +367,9 @@ CRITICAL INSTRUCTIONS:
    - **Ship-to Full Address**
    - **Bill-to Party ID**
 3. When outputting the details table, you MUST NOT output any introductory text (like "Here is the details..."), any conversational remarks, or concluding footnotes (like "Customer records are retrieved..."). Output ONLY the markdown table itself. No other text is allowed.
-4. If the user asks about a DIFFERENT serial number, you MUST use the 'get_serial_details' tool immediately to query the details of that new serial number, update your active context, and continue the conversation seamlessly.
+4. If the user asks about multiple serial numbers, or if you detect multiple serial numbers in the message, query the details for each of them using the 'get_serial_details' tool and present the details/table for each serial number one by one, separated clearly (e.g. by headers and a horizontal rule "---").
 5. Active context serial number is: ${targetSerial || 'None'}. Use this serial number as the default if the user asks questions like "what is its status", "who is the ship to", or "where is it" without specifying a serial number.
-6. If 'get_serial_details' returns that a serial number was not found, tell the user that no records exist for that item in the SAP Neptune database.`;
+6. If 'get_serial_details' returns that a serial number was not found, you MUST respond with exactly: "Serial number doesnot exist".`;
 
       const prompt = `User Question: "${message}"`;
 
@@ -385,50 +392,51 @@ CRITICAL INSTRUCTIONS:
         let response = result.response;
         let functionCalls = response.functionCalls;
 
-        // If Gemini requests a tool execution, process it via MCP client
-        if (functionCalls && functionCalls.length > 0) {
-          const call = functionCalls[0];
-          if (call.name === 'get_serial_details') {
-            const { serialNumber: querySerial } = call.args;
-            console.log(`[Gemini Tool Call] Invoking MCP tool get_serial_details for: ${querySerial}`);
-            
-            let toolResponseData = {};
-            try {
-              const client = await getMcpClient();
-              const mcpResponse = await client.callTool({
-                name: 'get_serial_details',
-                arguments: { serialNumber: String(querySerial).trim() }
-              });
+        // Loop to support sequential and parallel tool calls (loops through all requested serial numbers)
+        while (functionCalls && functionCalls.length > 0) {
+          const functionResponses = [];
+          for (const call of functionCalls) {
+            if (call.name === 'get_serial_details') {
+              const { serialNumber: querySerial } = call.args;
+              console.log(`[Gemini Tool Call] Invoking MCP tool get_serial_details for: ${querySerial}`);
               
-              if (mcpResponse.isError) {
-                toolResponseData = { error: mcpResponse.content[0].text };
-              } else {
-                toolResponseData = JSON.parse(mcpResponse.content[0].text);
-                if (toolResponseData && !toolResponseData.notFound) {
-                  targetSerial = toolResponseData.serialNumber || targetSerial;
-                  productName = toolResponseData.product || productName;
-                  // Persist the resolved details to SQL Server Scans & seed tables
-                  await saveChatLookupToDb(targetSerial, toolResponseData);
+              let toolResponseData = {};
+              try {
+                const client = await getMcpClient();
+                const mcpResponse = await client.callTool({
+                  name: 'get_serial_details',
+                  arguments: { serialNumber: String(querySerial).trim() }
+                });
+                
+                if (mcpResponse.isError) {
+                  toolResponseData = { error: mcpResponse.content[0].text };
+                } else {
+                  toolResponseData = JSON.parse(mcpResponse.content[0].text);
+                  if (toolResponseData && !toolResponseData.notFound) {
+                    targetSerial = toolResponseData.serialNumber || targetSerial;
+                    productName = toolResponseData.product || productName;
+                    // Persist the resolved details to SQL Server Scans & seed tables
+                    await saveChatLookupToDb(querySerial, toolResponseData);
+                  }
                 }
+              } catch (mcpErr) {
+                console.error("[MCP Client Tool Call Error]:", mcpErr.message);
+                toolResponseData = { error: `MCP Server Tool Call Error: ${mcpErr.message}` };
               }
-            } catch (mcpErr) {
-              console.error("[MCP Client Tool Call Error]:", mcpErr.message);
-              toolResponseData = { error: `MCP Server Tool Call Error: ${mcpErr.message}` };
-            }
-
-            console.log(`[MCP Server Response]:`, toolResponseData);
-
-            // Feed the function response back to Gemini
-            result = await chat.sendMessage([
-              {
+              functionResponses.push({
                 functionResponse: {
                   name: 'get_serial_details',
                   response: toolResponseData
                 }
-              }
-            ]);
-            response = result.response;
+              });
+            }
           }
+
+          if (functionResponses.length === 0) break;
+
+          result = await chat.sendMessage(functionResponses);
+          response = result.response;
+          functionCalls = response.functionCalls;
         }
 
         const responseText = response.text().trim();
@@ -448,9 +456,9 @@ CRITICAL INSTRUCTIONS:
     }
 
     // 3. Graceful Fallback: Deterministic keyword-based parser
-    console.log(`[Chat Orchestrator] Using local fallback parser for Serial "${targetSerial}"...`);
+    console.log(`[Chat Orchestrator] Using local fallback parser for Serials: ${potentialSerials.join(', ')}...`);
 
-    if (!targetSerial || targetSerial === 'undefined' || targetSerial === 'null') {
+    if (potentialSerials.length === 0 && (!targetSerial || targetSerial === 'undefined' || targetSerial === 'null')) {
       return res.status(200).json({
         success: true,
         category: 'Summary',
@@ -461,28 +469,35 @@ CRITICAL INSTRUCTIONS:
       });
     }
 
-    let serialApiData = await fetchSerialDataInternal(targetSerial);
-    let responseText = '';
-    if (serialApiData && !serialApiData.notFound) {
-      // Save lookup result to SQL Server Database!
-      await saveChatLookupToDb(targetSerial, serialApiData);
-      productName = serialApiData.product;
+    const serialsToQuery = potentialSerials.length > 0 ? potentialSerials : [targetSerial];
+    const detailsTables = [];
 
-      const lowerMsg = message.toLowerCase();
-      // Check for specific single-field requests
-      if (lowerMsg.includes('sold to') || lowerMsg.includes('sold-to')) {
-        responseText = `The **Sold-to Party** for serial number **${targetSerial}** is **${serialApiData.soldToParty}** (ID: ${serialApiData.soldToPartyId || 'N/A'}).\nAddress: ${serialApiData.soldToFullAddress || 'N/A'}`;
-      } else if (lowerMsg.includes('ship to') || lowerMsg.includes('ship-to')) {
-        responseText = `The **Ship-to Party** for serial number **${targetSerial}** is **${serialApiData.shipToParty}** (ID: ${serialApiData.shipToPartyId || 'N/A'}).\nAddress: ${serialApiData.shipToFullAddress || 'N/A'}`;
-      } else if (lowerMsg.includes('bill to') || lowerMsg.includes('bill-to')) {
-        responseText = `The **Bill-to Party ID** for serial number **${targetSerial}** is **${serialApiData.billToPartyId || 'N/A'}.`;
-      } else if (lowerMsg.includes('status')) {
-        responseText = `The SAP Status for serial number **${targetSerial}**:\n- **System Status**: ${serialApiData.systemStatusDesc || serialApiData.status} (Code: ${serialApiData.systemStatusCode || 'N/A'})\n- **User Status**: ${serialApiData.userStatusDesc || 'N/A'} (Code: ${serialApiData.userStatusCode || 'N/A'})`;
-      } else if (lowerMsg.includes('model') || lowerMsg.includes('product')) {
-        responseText = `The **Product Model** for serial number **${targetSerial}** is **${serialApiData.product}**.`;
-      } else {
-        // Full Details markdown table ONLY (No intro or outro text)
-        responseText = `| Property | Value |
+    for (const s of serialsToQuery) {
+      if (!s || s === 'undefined' || s === 'null') continue;
+      
+      const serialApiData = await fetchSerialDataInternal(s);
+      if (serialApiData && !serialApiData.notFound) {
+        // Save lookup result to SQL Server Database!
+        await saveChatLookupToDb(s, serialApiData);
+        targetSerial = s;
+        productName = serialApiData.product;
+
+        const lowerMsg = message.toLowerCase();
+        let tableText = '';
+        if (lowerMsg.includes('sold to') || lowerMsg.includes('sold-to')) {
+          tableText = `### Serial Number: **${s}**\n- **Sold-to Party**: **${serialApiData.soldToParty}** (ID: ${serialApiData.soldToPartyId || 'N/A'})\n- **Address**: ${serialApiData.soldToFullAddress || 'N/A'}`;
+        } else if (lowerMsg.includes('ship to') || lowerMsg.includes('ship-to')) {
+          tableText = `### Serial Number: **${s}**\n- **Ship-to Party**: **${serialApiData.shipToParty}** (ID: ${serialApiData.shipToPartyId || 'N/A'})\n- **Address**: ${serialApiData.shipToFullAddress || 'N/A'}`;
+        } else if (lowerMsg.includes('bill to') || lowerMsg.includes('bill-to')) {
+          tableText = `### Serial Number: **${s}**\n- **Bill-to Party ID**: ${serialApiData.billToPartyId || 'N/A'}`;
+        } else if (lowerMsg.includes('status')) {
+          tableText = `### Serial Number: **${s}**\n- **System Status**: ${serialApiData.systemStatusDesc || serialApiData.status} (Code: ${serialApiData.systemStatusCode || 'N/A'})\n- **User Status**: ${serialApiData.userStatusDesc || 'N/A'} (Code: ${serialApiData.userStatusCode || 'N/A'})`;
+        } else if (lowerMsg.includes('model') || lowerMsg.includes('product')) {
+          tableText = `### Serial Number: **${s}**\n- **Product Model**: ${serialApiData.product}`;
+        } else {
+          // Full Details markdown table
+          tableText = `### Details for Serial Number: **${s}**
+| Property | Value |
 | :--- | :--- |
 | **Product Model** | ${serialApiData.product} |
 | **Serial Number** | ${serialApiData.serialNumber} |
@@ -493,10 +508,14 @@ CRITICAL INSTRUCTIONS:
 | **Ship-to Party** | **${serialApiData.shipToParty}** (ID: ${serialApiData.shipToPartyId || 'N/A'}) |
 | **Ship-to Address** | ${serialApiData.shipToFullAddress || 'N/A'} |
 | **Bill-to Party ID** | ${serialApiData.billToPartyId || 'N/A'} |`;
+        }
+        detailsTables.push(tableText);
+      } else {
+        detailsTables.push(`### Serial Number: **${s}**\n*Serial number doesnot exist*`);
       }
-    } else {
-      responseText = `⚠️ **No SAP API Records Found**: Serial number **${targetSerial}** could not be resolved from the SAP Neptune API database.`;
     }
+
+    const responseText = detailsTables.join('\n\n---\n\n');
 
     return res.status(200).json({
       success: true,

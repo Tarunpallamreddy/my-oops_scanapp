@@ -27,28 +27,7 @@ export default function App() {
   const [profileEmail, setProfileEmail] = useState<string>('tarun.pallamreddy@mygoconsulting.com');
   const [theme, setTheme] = useState<'dark' | 'light'>('light');
 
-  // Drawer Animation States
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
-  const drawerAnimation = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
 
-  const toggleDrawer = (open: boolean) => {
-    if (open) {
-      setIsDrawerOpen(true);
-      Animated.timing(drawerAnimation, {
-        toValue: 0,
-        duration: 250,
-        useNativeDriver: true,
-      }).start();
-    } else {
-      Animated.timing(drawerAnimation, {
-        toValue: -DRAWER_WIDTH,
-        duration: 220,
-        useNativeDriver: true,
-      }).start(() => {
-        setIsDrawerOpen(false);
-      });
-    }
-  };
 
   const isDark = theme === 'dark';
 
@@ -87,7 +66,6 @@ export default function App() {
           productName={activeSerialContext.productName}
           theme={theme}
           onClose={() => setCurrentScreen('Scan')}
-          onOpenDrawer={() => toggleDrawer(true)}
         />
       );
     }
@@ -101,7 +79,7 @@ export default function App() {
           setActiveSerialContext({ serialNumber, productName });
           setCurrentScreen('Chat');
         }}
-        onOpenDrawer={() => toggleDrawer(true)}
+        onOpenSettings={() => setCurrentScreen('Settings')}
       />
     );
   };
@@ -110,96 +88,6 @@ export default function App() {
     <SafeAreaProvider>
       <View style={[styles.container, { backgroundColor: isDark ? '#090d16' : '#f8fafc' }]}>
         {renderContent()}
-
-        {/* Semi-transparent Backdrop overlay */}
-        {isDrawerOpen && (
-          <TouchableOpacity
-            style={styles.backdrop}
-            activeOpacity={1}
-            onPress={() => toggleDrawer(false)}
-          >
-            <View style={{ flex: 1 }} />
-          </TouchableOpacity>
-        )}
-
-        {/* Collapsible Left Side Panel */}
-        <Animated.View
-          style={[
-            styles.drawerContainer,
-            {
-              transform: [{ translateX: drawerAnimation }],
-              backgroundColor: colors.bg,
-              borderRightColor: colors.border,
-            },
-          ]}
-        >
-          {/* Brand Header */}
-          <View style={[styles.drawerHeader, { borderBottomColor: colors.border }]}>
-            <View style={styles.logoIconWrapper}>
-              <Text style={styles.logoIcon}>📷</Text>
-            </View>
-            <View>
-              <Text style={[styles.brandName, { color: colors.text }]}>My Scan Hub</Text>
-              <Text style={[styles.brandSubtitle, { color: colors.mutedText }]}>INTELLIGENCE HUB</Text>
-            </View>
-          </View>
-
-          {/* Navigation Links */}
-          <View style={styles.menuItems}>
-            {/* Scan Hub Option */}
-            <TouchableOpacity
-              style={[
-                styles.menuItem,
-                currentScreen === 'Scan' && { backgroundColor: colors.activeBg },
-              ]}
-              onPress={() => {
-                setCurrentScreen('Scan');
-                toggleDrawer(false);
-              }}
-            >
-              <Text style={{ fontSize: 18 }}>📷</Text>
-              <Text style={[styles.menuItemText, { color: colors.text }]}>Scan Hub</Text>
-            </TouchableOpacity>
-
-            {/* Serial Search AI Assistant Option */}
-            <TouchableOpacity
-              style={[
-                styles.menuItem,
-                currentScreen === 'Chat' && { backgroundColor: colors.activeBg },
-              ]}
-              onPress={() => {
-                // Open Chat with empty context for general inquiry
-                setActiveSerialContext({ serialNumber: '', productName: '' });
-                setCurrentScreen('Chat');
-                toggleDrawer(false);
-              }}
-            >
-              <Text style={{ fontSize: 18 }}>🤖</Text>
-              <Text style={[styles.menuItemText, { color: colors.text }]}>Serial Search AI Assistant</Text>
-            </TouchableOpacity>
-
-            {/* Profile Option */}
-            <TouchableOpacity
-              style={[
-                styles.menuItem,
-                currentScreen === 'Settings' && { backgroundColor: colors.activeBg },
-              ]}
-              onPress={() => {
-                setCurrentScreen('Settings');
-                toggleDrawer(false);
-              }}
-            >
-              <Text style={{ fontSize: 18 }}>👤</Text>
-              <Text style={[styles.menuItemText, { color: colors.text }]}>Profile</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Footer User Profile Card */}
-          <View style={[styles.footer, { borderTopColor: colors.border }]}>
-            <Text style={[styles.profileName, { color: colors.text }]}>{profileName}</Text>
-            <Text style={[styles.profileEmail, { color: colors.mutedText }]}>{profileEmail}</Text>
-          </View>
-        </Animated.View>
       </View>
     </SafeAreaProvider>
   );
