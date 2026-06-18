@@ -35,7 +35,6 @@ interface ChatScreenProps {
   productName?: string;
   theme: 'dark' | 'light';
   onClose: () => void;
-  onOpenDrawer: () => void;
 }
 
 // Custom minimalist vector outline icons (monochrome, plain, without colors)
@@ -161,7 +160,6 @@ export function ChatScreen({
   productName = '',
   theme,
   onClose,
-  onOpenDrawer,
 }: ChatScreenProps) {
   const isDark = theme === 'dark';
   const scrollViewRef = useRef<ScrollView>(null);
@@ -507,18 +505,7 @@ export function ChatScreen({
       {/* Header */}
       <View style={[styles.header, { backgroundColor: colors.headerBg, borderColor: colors.border }]}>
         <View style={styles.headerLeftRow}>
-          <TouchableOpacity
-            style={[
-              styles.backButton,
-              { marginRight: 10 },
-              !isDark && { backgroundColor: '#e2e8f0', borderColor: 'rgba(0,0,0,0.06)' }
-            ]}
-            onPress={onOpenDrawer}
-          >
-            <Text style={[styles.backButtonText, { color: colors.text }]}>☰</Text>
-          </TouchableOpacity>
-
-          <View style={{ flex: 1, marginRight: 4 }}>
+          <View style={{ flex: 1 }}>
             <Text style={[styles.headerTitle, { color: colors.text }]} numberOfLines={1}>Serial Search AI Assistant</Text>
             <Text style={[styles.headerSubtitle, { color: colors.mutedText }]} numberOfLines={1}>AI Serial Intelligence</Text>
           </View>

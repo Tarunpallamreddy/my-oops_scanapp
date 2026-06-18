@@ -363,10 +363,10 @@ export function ScanScreen({
         if (stored) {
           const parsed = JSON.parse(stored);
           setScans(parsed);
-          
+
           // Try syncing any pending local scans right away in the background
           syncScansList(parsed, true);
-          
+
           // 2. Fetch latest scans from server and merge them
           getScanHistory()
             .then((response) => {
@@ -374,12 +374,12 @@ export function ScanScreen({
                 setScans((currentScans) => {
                   const serverScans = response.data || [];
                   const mergedMap = new Map<string, ScanResult>();
-                  
+
                   // First add all server scans (which are synced)
                   serverScans.forEach(s => {
                     mergedMap.set(s.id, { ...s, status: 'synced' });
                   });
-                  
+
                   // Add local scans (preserving any pending/failed states)
                   currentScans.forEach(s => {
                     if (!mergedMap.has(s.id)) {
@@ -469,7 +469,7 @@ export function ScanScreen({
 
       const fileUri = `${FileSystem.documentDirectory}${filename}`;
       const downloadResult = await FileSystem.downloadAsync(url, fileUri);
-      
+
       if (downloadResult.status !== 200) {
         throw new Error(`Failed to download file: Status code ${downloadResult.status}`);
       }
@@ -581,13 +581,13 @@ export function ScanScreen({
           const updated: ScanResult[] = prev.map((item) =>
             item.id === newScan.id
               ? ({
-                  ...item,
-                  id: serverId || item.id,
-                  status: nextStatus,
-                  details: serverDetails || item.details,
-                  redirectUrl: serverRedirectUrl || item.redirectUrl,
-                  classification: serverClassification || item.classification,
-                } as ScanResult)
+                ...item,
+                id: serverId || item.id,
+                status: nextStatus,
+                details: serverDetails || item.details,
+                redirectUrl: serverRedirectUrl || item.redirectUrl,
+                classification: serverClassification || item.classification,
+              } as ScanResult)
               : item
           );
           saveScansToStorage(updated);
@@ -599,13 +599,13 @@ export function ScanScreen({
             prev.map((item) =>
               item.id === newScan.id
                 ? ({
-                    ...item,
-                    id: serverId || item.id,
-                    status: nextStatus,
-                    details: serverDetails || item.details,
-                    redirectUrl: serverRedirectUrl || item.redirectUrl,
-                    classification: serverClassification || item.classification,
-                  } as ScanResult)
+                  ...item,
+                  id: serverId || item.id,
+                  status: nextStatus,
+                  details: serverDetails || item.details,
+                  redirectUrl: serverRedirectUrl || item.redirectUrl,
+                  classification: serverClassification || item.classification,
+                } as ScanResult)
                 : item
             )
           );
@@ -672,7 +672,7 @@ export function ScanScreen({
     const isDuplicate = scans.some((item) => item.data === data);
     if (isDuplicate) {
       isAlertShowingRef.current = true;
-      
+
       // Pause camera feed in single mode to allow user to handle the popup
       if (!multiScanMode) {
         setIsCameraActive(false);
@@ -697,7 +697,7 @@ export function ScanScreen({
             style: 'default',
             onPress: () => {
               isAlertShowingRef.current = false;
-              
+
               if (multiScanMode) {
                 sessionScannedCodesRef.current.add(data);
                 const count = sessionScannedCodesRef.current.size;
@@ -807,14 +807,14 @@ export function ScanScreen({
         style: 'destructive',
         onPress: () => {
           const scan = scans.find((s) => s.id === id);
-          
+
           setScans((prev) => {
             const updated = prev.filter((item) => item.id !== id);
             saveScansToStorage(updated);
             return updated;
           });
           setSessionScans((prev) => prev.filter((item) => item.id !== id));
-          
+
           if (scan) {
             sessionScannedCodesRef.current.delete(scan.data);
             const count = sessionScannedCodesRef.current.size;
@@ -1329,7 +1329,7 @@ export function ScanScreen({
               </View>
             }
           />
-          
+
           <TouchableOpacity
             style={[
               styles.createSalesOrderBtn,
@@ -1389,7 +1389,7 @@ export function ScanScreen({
               ]}
               onPress={() => onOpenChat('', '')}
             >
-              <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>🤖 AskMe</Text>
+              <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>serialAgent</Text>
             </TouchableOpacity>
           </Animated.View>
 
@@ -1400,14 +1400,18 @@ export function ScanScreen({
                 backgroundColor: isDark ? '#1e293b' : '#e2e8f0',
                 borderColor: isDark ? '#334155' : '#cbd5e1',
                 flexDirection: 'row',
-                paddingHorizontal: 12,
-                paddingVertical: 8,
-                borderRadius: 20,
+                justifyContent: 'center',
+                alignItems: 'center',
+                width: 38,
+                height: 38,
+                borderRadius: 19,
+                paddingHorizontal: 0,
+                paddingVertical: 0,
               }
             ]}
             onPress={onOpenSettings}
           >
-            <Text style={{ color: isDark ? '#f8fafc' : '#0f172a', fontSize: 13, fontWeight: '600' }}>👤 Profile</Text>
+            <Text style={{ color: isDark ? '#f8fafc' : '#0f172a', fontSize: 16 }}>👤</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -1649,7 +1653,7 @@ export function ScanScreen({
                       </View>
                     )}
                 </View>
- 
+
                 {/* Main Link/Redirect Action Button */}
                 {singleScanResult.classification === 'OCR Serial Number' ? (
                   <TouchableOpacity
