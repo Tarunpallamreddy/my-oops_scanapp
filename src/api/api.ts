@@ -84,13 +84,15 @@ export async function updateSalesOrder(
  */
 export async function sendChatMessage(
   serialNumber: string,
-  message: string
-): Promise<ApiResponse<{ success: boolean; category: string; responseText: string; serialNumber?: string | null; productName?: string | null }>> {
-  return apiClient<{ success: boolean; category: string; responseText: string; serialNumber?: string | null; productName?: string | null }>('/chat', {
+  message: string,
+  image?: string
+): Promise<ApiResponse<{ success: boolean; category: string; responseText: string; serialNumber?: string | null; productName?: string | null; detectedSerials?: string[] }>> {
+  return apiClient<{ success: boolean; category: string; responseText: string; serialNumber?: string | null; productName?: string | null; detectedSerials?: string[] }>('/chat', {
     method: 'POST',
     body: JSON.stringify({
       serialNumber,
       message,
+      image,
     }),
   });
 }

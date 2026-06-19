@@ -79,6 +79,21 @@ async function discoverBaseUrl(): Promise<string | null> {
   return null;
 }
 
+async function verifyUrlHealth(baseUrl: string): Promise<boolean> {
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(`${baseUrl}/health`, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
 interface RequestConfig extends RequestInit {
   params?: Record<string, string>;
 }
@@ -100,6 +115,16 @@ export async function apiClient<T>(
     ...defaultHeaders,
     ...headers,
   };
+
+  // Verify cached base URL is still healthy
+  if (activeBaseUrl) {
+    const isHealthy = await verifyUrlHealth(activeBaseUrl);
+    if (!isHealthy) {
+      console.log(`[API Client] Cached active base URL ${activeBaseUrl} is stale/unreachable. Clearing cache.`);
+      activeBaseUrl = null;
+      await AsyncStorage.removeItem('@mygoscan:active_base_url').catch(() => {});
+    }
+  }
 
   // If we don't have a cached active base URL, perform quick parallel discovery
   if (!activeBaseUrl) {
@@ -178,6 +203,13 @@ export async function apiClient<T>(
       console.log(`[API Client] Failed connection to ${url}: ${err.message}`);
       lastErrorMsg = err.message || `Failed to connect to ${baseUrl}`;
       lastStatusCode = 0;
+      
+      // If the cached activeBaseUrl failed connection, clear it
+      if (baseUrl === activeBaseUrl) {
+        console.log(`[API Client] Cached active base URL ${activeBaseUrl} failed connection. Clearing cache.`);
+        activeBaseUrl = null;
+        AsyncStorage.removeItem('@mygoscan:active_base_url').catch(() => {});
+      }
       // Loop continues to try other fallback base URLs
     }
   }

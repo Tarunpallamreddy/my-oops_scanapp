@@ -28,6 +28,15 @@ import { submitScan, getScanHistory, clearScanHistory, updateSalesOrder, deleteS
 
 const LOCAL_SCANS_KEY = '@mygoscan:scans';
 
+const ProfileIcon = ({ color }: { color: string }) => (
+  <View style={{ width: 22, height: 22, justifyContent: 'center', alignItems: 'center' }}>
+    {/* Head */}
+    <View style={{ width: 8, height: 8, borderRadius: 4, borderWidth: 2, borderColor: color, marginBottom: 2 }} />
+    {/* Body */}
+    <View style={{ width: 14, height: 6, borderTopLeftRadius: 6, borderTopRightRadius: 6, borderWidth: 2, borderColor: color, borderBottomWidth: 0 }} />
+  </View>
+);
+
 // Local Helpers for Instant Mobile Side Parsing (0ms Latency)
 
 function classifyCodeLocally(code: string, type: string): 'Barcode' | 'OCR Serial Number' | 'Web Link' | 'Text' {
@@ -1389,29 +1398,20 @@ export function ScanScreen({
               ]}
               onPress={() => onOpenChat('', '')}
             >
-              <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>serialAgent</Text>
+              <Text style={{ color: '#ffffff', fontSize: 13, fontWeight: '700' }}>🎧 Chat with Agent</Text>
             </TouchableOpacity>
           </Animated.View>
 
           <TouchableOpacity
-            style={[
-              styles.headerButton,
-              {
-                backgroundColor: isDark ? '#1e293b' : '#e2e8f0',
-                borderColor: isDark ? '#334155' : '#cbd5e1',
-                flexDirection: 'row',
-                justifyContent: 'center',
-                alignItems: 'center',
-                width: 38,
-                height: 38,
-                borderRadius: 19,
-                paddingHorizontal: 0,
-                paddingVertical: 0,
-              }
-            ]}
+            style={{
+              justifyContent: 'center',
+              alignItems: 'center',
+              padding: 8,
+              marginLeft: 4,
+            }}
             onPress={onOpenSettings}
           >
-            <Text style={{ color: isDark ? '#f8fafc' : '#0f172a', fontSize: 16 }}>👤</Text>
+            <ProfileIcon color="#ff682c" />
           </TouchableOpacity>
         </View>
       </View>

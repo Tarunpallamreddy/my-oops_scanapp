@@ -21,6 +21,7 @@ import { sendChatMessage } from '../api/api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { ScannerOverlay } from './ScannerOverlay';
+import * as FileSystem from 'expo-file-system/legacy';
 
 interface ChatMessage {
   id: string;
@@ -166,6 +167,7 @@ export function ChatScreen({
   const [inputText, setInputText] = useState<string>('');
   const [loading, setLoading] = useState<boolean>(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedImageUri, setSelectedImageUri] = useState<string | null>(null);
 
   const [activeSerial, setActiveSerial] = useState<string>(serialNumber);
   const [activeProduct, setActiveProduct] = useState<string>(productName);
@@ -255,66 +257,7 @@ export function ChatScreen({
         setIsPhotoModalVisible(false);
         
         if (photo && photo.uri) {
-          const userMsg: ChatMessage = {
-            id: Date.now().toString() + '-user-photo',
-            sender: 'user',
-            text: '📸 Sent a photo for OCR lookup',
-            imageUri: photo.uri,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          };
-
-          setMessages((prev) => {
-            const newMessages = [...prev, userMsg];
-            AsyncStorage.setItem('@mygoscan:chat_messages', JSON.stringify(newMessages)).catch(() => {});
-            return newMessages;
-          });
-          
-          setLoading(true);
-          
-          setTimeout(async () => {
-            const targetSerial = activeSerial || '2043052447';
-            try {
-              const apiRes = await sendChatMessage(targetSerial, `show me details of ${targetSerial}`);
-              
-              if (apiRes.success && apiRes.data) {
-                if (apiRes.data.serialNumber && apiRes.data.serialNumber !== 'undefined' && apiRes.data.serialNumber !== 'null') {
-                  setActiveSerial(apiRes.data.serialNumber);
-                  if (apiRes.data.productName) {
-                    setActiveProduct(apiRes.data.productName);
-                  }
-                }
-
-                const aiMsg: ChatMessage = {
-                  id: Date.now().toString() + '-ai-ocr',
-                  sender: 'assistant',
-                  text: `🔍 **OCR Image Analysis**: Extracted Serial Number: **${targetSerial}**.\n\nHere are the SAP Neptune API registration details:\n\n${apiRes.data.responseText}`,
-                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                };
-                
-                setMessages((prev) => {
-                  const newMessages = [...prev, aiMsg];
-                  AsyncStorage.setItem('@mygoscan:chat_messages', JSON.stringify(newMessages)).catch(() => {});
-                  return newMessages;
-                });
-              } else {
-                throw new Error(apiRes.error || 'Server error');
-              }
-            } catch (e: any) {
-              const aiMsg: ChatMessage = {
-                id: Date.now().toString() + '-ai-ocr-err',
-                sender: 'assistant',
-                text: `🔍 **OCR Image Analysis**: Found serial number **${targetSerial}**, but could not query details.\n⚠️ **Connection Error**: ${e.message || 'API is offline.'}`,
-                timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-              };
-              setMessages((prev) => {
-                const newMessages = [...prev, aiMsg];
-                AsyncStorage.setItem('@mygoscan:chat_messages', JSON.stringify(newMessages)).catch(() => {});
-                return newMessages;
-              });
-            } finally {
-              setLoading(false);
-            }
-          }, 2500);
+          setSelectedImageUri(photo.uri);
         }
       } catch (err: any) {
         Alert.alert('Capture Failed', `Could not take photo: ${err.message}`);
@@ -426,16 +369,23 @@ export function ChatScreen({
 
   const handleSendMessage = async (customText?: string) => {
     const textToSend = (customText || inputText).trim();
-    if (!textToSend) return;
+    if (!textToSend && !selectedImageUri) return;
+
+    const finalMsgText = textToSend || '📸 Sent a photo for OCR lookup';
 
     if (!customText) {
       setInputText('');
     }
 
+    const imageUriToSend = selectedImageUri;
+    // Clear attachment draft immediately
+    setSelectedImageUri(null);
+
     const userMsg: ChatMessage = {
       id: Date.now().toString() + '-user',
       sender: 'user',
-      text: textToSend,
+      text: finalMsgText,
+      imageUri: imageUriToSend || undefined,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
@@ -447,7 +397,18 @@ export function ChatScreen({
     setLoading(true);
 
     try {
-      const apiRes = await sendChatMessage(activeSerial, textToSend);
+      let base64Image: string | undefined;
+      if (imageUriToSend) {
+        try {
+          base64Image = await FileSystem.readAsStringAsync(imageUriToSend, {
+            encoding: 'base64',
+          });
+        } catch (readErr: any) {
+          console.warn("Failed to read image as base64:", readErr);
+        }
+      }
+
+      const apiRes = await sendChatMessage(activeSerial, finalMsgText, base64Image);
       if (apiRes.success && apiRes.data) {
         // If backend returned a resolved serial number and product name, sync it back to active context!
         if (apiRes.data.serialNumber && apiRes.data.serialNumber !== 'undefined' && apiRes.data.serialNumber !== 'null') {
@@ -457,10 +418,15 @@ export function ChatScreen({
           }
         }
 
+        const detected = apiRes.data.detectedSerials || [];
+        const detectedStr = detected.length > 0 ? detected.join(', ') : '';
+
+        const prefix = detectedStr ? `🔍 **OCR Image Analysis**: Extracted: **${detectedStr}**.\n\n` : '';
+
         const aiMsg: ChatMessage = {
           id: Date.now().toString() + '-ai',
           sender: 'assistant',
-          text: apiRes.data.responseText,
+          text: `${prefix}${apiRes.data.responseText}`,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         setMessages((prev) => {
@@ -612,6 +578,21 @@ export function ChatScreen({
           )}
         </ScrollView>
 
+        {/* Selected Image Preview Attachment Draft */}
+        {!!selectedImageUri && (
+          <View style={[styles.attachmentPreviewContainer, { borderTopColor: colors.border, backgroundColor: colors.bg }]}>
+            <View style={styles.attachmentPreviewWrapper}>
+              <Image source={{ uri: selectedImageUri }} style={styles.attachmentPreviewImage} />
+              <TouchableOpacity
+                style={styles.attachmentPreviewCloseBtn}
+                onPress={() => setSelectedImageUri(null)}
+              >
+                <Text style={styles.attachmentPreviewCloseText}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
         {/* Input Bar */}
         <View style={[styles.inputBar, { backgroundColor: colors.headerBg, borderTopColor: colors.border }]}>
           <View style={[styles.inputContainer, { backgroundColor: colors.inputBg }]}>
@@ -646,12 +627,12 @@ export function ChatScreen({
           <TouchableOpacity
             style={[
               styles.sendButton,
-              { backgroundColor: inputText.trim() && !loading ? '#ff682c' : (isDark ? '#1e293b' : '#cbd5e1') },
+              { backgroundColor: (inputText.trim() || selectedImageUri) && !loading ? '#ff682c' : (isDark ? '#1e293b' : '#cbd5e1') },
             ]}
             onPress={() => handleSendMessage()}
-            disabled={!inputText.trim() || loading}
+            disabled={(!inputText.trim() && !selectedImageUri) || loading}
           >
-            <Text style={[styles.sendButtonText, { color: inputText.trim() && !loading ? '#ffffff' : (isDark ? '#475569' : '#94a3b8') }]}>
+            <Text style={[styles.sendButtonText, { color: (inputText.trim() || selectedImageUri) && !loading ? '#ffffff' : (isDark ? '#475569' : '#94a3b8') }]}>
               Send
             </Text>
           </TouchableOpacity>
@@ -680,10 +661,10 @@ export function ChatScreen({
           />
           <ScannerOverlay flash={flash} onToggleFlash={() => setFlash(!flash)} />
 
-          {/* Top Close Header with Done Button */}
-          <SafeAreaView style={styles.scanModalHeader} edges={['top']}>
+          {/* Bottom Right Control Buttons (Handy to Handle) */}
+          <View style={styles.scanModalControls}>
             <TouchableOpacity
-              style={styles.scanModalCloseBtn}
+              style={styles.scanModalCancelBtn}
               onPress={() => setIsScanModalVisible(false)}
             >
               <Text style={styles.scanModalCloseText}>✕ Cancel</Text>
@@ -691,13 +672,13 @@ export function ChatScreen({
 
             {scannedCodes.length > 0 && (
               <TouchableOpacity
-                style={[styles.scanModalCloseBtn, { backgroundColor: '#ff682c', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }]}
+                style={styles.scanModalDoneBtn}
                 onPress={handleFinishMultiScan}
               >
-                <Text style={[styles.scanModalCloseText, { color: '#ffffff', fontWeight: 'bold' }]}>✓ Done ({scannedCodes.length})</Text>
+                <Text style={[styles.scanModalCloseText, { fontWeight: 'bold' }]}>✓ Done ({scannedCodes.length})</Text>
               </TouchableOpacity>
             )}
-          </SafeAreaView>
+          </View>
 
           {/* Scanned Items HUD Overlay for Multi Scan Mode */}
           {scannedCodes.length > 0 && (
@@ -975,23 +956,30 @@ const styles = StyleSheet.create({
   },
 
   // Scanner Modal styles
-  scanModalHeader: {
+  scanModalControls: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'android' ? 16 : 0,
+    bottom: 30,
+    right: 20,
     flexDirection: 'row',
-    justifyContent: 'flex-start',
+    alignItems: 'center',
+    zIndex: 30,
   },
-  scanModalCloseBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    backgroundColor: 'rgba(9, 13, 22, 0.8)',
+  scanModalCancelBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 22,
+    backgroundColor: 'rgba(9, 13, 22, 0.85)',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.15)',
+    borderColor: 'rgba(255, 255, 255, 0.2)',
+    marginRight: 10,
+  },
+  scanModalDoneBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 22,
+    borderRadius: 22,
+    backgroundColor: '#ff682c',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.2)',
   },
   scanModalCloseText: {
     color: '#ffffff',
@@ -1101,7 +1089,7 @@ const styles = StyleSheet.create({
   },
   cameraScannedHud: {
     position: 'absolute',
-    bottom: 40,
+    bottom: 100,
     left: 16,
     right: 16,
     backgroundColor: 'rgba(9, 13, 22, 0.85)',
@@ -1144,5 +1132,37 @@ const styles = StyleSheet.create({
     color: '#f8fafc',
     fontSize: 11,
     fontWeight: '700',
+  },
+  attachmentPreviewContainer: {
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderTopWidth: 1,
+    flexDirection: 'row',
+  },
+  attachmentPreviewWrapper: {
+    position: 'relative',
+    borderRadius: 8,
+    overflow: 'hidden',
+  },
+  attachmentPreviewImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 8,
+  },
+  attachmentPreviewCloseBtn: {
+    position: 'absolute',
+    top: 4,
+    right: 4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(9, 13, 22, 0.8)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  attachmentPreviewCloseText: {
+    color: '#ffffff',
+    fontSize: 9,
+    fontWeight: 'bold',
   },
 });
