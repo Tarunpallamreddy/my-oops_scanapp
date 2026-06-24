@@ -26,7 +26,7 @@ const getCandidateBaseUrls = () => {
   }
 
   // 2. Current host Wi-Fi IP (Current active IP of the computer running backend)
-  urls.push('http://192.168.1.5:3000/api/v1');
+  urls.push('http://192.168.1.6:3000/api/v1');
 
   // 3. Emulator loopback
   urls.push('http://10.0.2.2:3000/api/v1');

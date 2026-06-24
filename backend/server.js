@@ -43,7 +43,11 @@ app.get('/api/v1/health', (req, res) => {
  * @returns {object}
  */
 function getMockSerialDetails(serialNumber) {
-  const seed = String(serialNumber).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  let hash = 5381;
+  for (let i = 0; i < String(serialNumber).length; i++) {
+    hash = ((hash << 5) + hash) + String(serialNumber).charCodeAt(i);
+  }
+  const seed = Math.abs(hash);
   const products = [
     'Enterprise Scanner Frame V2',
     'High-Performance Handheld PDA',

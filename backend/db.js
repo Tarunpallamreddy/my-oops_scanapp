@@ -112,18 +112,33 @@ getPool().catch(() => { });
 
 async function seedOrderInsights(dbPool, serialNumber, productName = 'Enterprise Device Frame V2') {
   try {
-    // Check if an order already exists for this serialNumber
-    const orderCheck = await dbPool.request()
+    // 1. Check if this serialNumber is already seeded
+    const serialCheck = await dbPool.request()
       .input('serialNumber', sql.VarChar(50), serialNumber)
       .query('SELECT orderNumber FROM Orders WHERE serialNumber = @serialNumber');
 
-    if (orderCheck.recordset.length > 0) {
+    if (serialCheck.recordset.length > 0) {
       return; // Already seeded
     }
 
-    // Generate deterministic values based on serial number string
-    const seed = String(serialNumber).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    // Generate deterministic values based on serial number string using DJB2 hash
+    let hash = 5381;
+    for (let i = 0; i < String(serialNumber).length; i++) {
+      hash = ((hash << 5) + hash) + String(serialNumber).charCodeAt(i);
+    }
+    const seed = Math.abs(hash);
     const orderNum = `5${String((seed % 900000000) + 100000000)}`;
+
+    // 2. Check if this orderNumber is already used by another serial to prevent primary key constraint violation
+    const orderCheck = await dbPool.request()
+      .input('orderNumber', sql.VarChar(50), orderNum)
+      .query('SELECT serialNumber FROM Orders WHERE orderNumber = @orderNumber');
+
+    if (orderCheck.recordset.length > 0) {
+      console.warn(`[Database] Order number ${orderNum} already exists for serial ${orderCheck.recordset[0].serialNumber}. Skipping seeding to avoid primary key violation.`);
+      return;
+    }
+
     const delNum = `DEL-8${(seed % 900000) + 100000}`;
     const trackingNum = `TRK-${(seed % 90000000) + 10000000}`;
     const invoiceNum = `INV-9${(seed % 900000) + 100000}`;
